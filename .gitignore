@@ -1,0 +1,17 @@
+.DS_Store
+.build/
+*.o
+*.d
+xcuserdata/
+*.xcworkspace/
+DerivedData/
+*.moved-aside
+*.pbxuser
+*.perspectivev3
+*.xccheckout
+*.xcscmblueprint
+gridforge.db
+*.swp
+*.bak
+GridForge.app/
+.build/
