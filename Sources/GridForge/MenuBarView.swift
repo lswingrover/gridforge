@@ -4,7 +4,6 @@ import GridForgeCore
 struct MenuBarView: View {
     @EnvironmentObject var appState:      AppState
     @EnvironmentObject var updateChecker: UpdateChecker
-    @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow)   private var openWindow
 
     var body: some View {
@@ -40,7 +39,7 @@ struct MenuBarView: View {
             Divider()
         }
 
-        Button("Preferences…") { openSettings() }
+        Button("Preferences…") { NSApp.activate(ignoringOtherApps: true); openWindow(id: "prefs") }
 
         Button("About GridForge…") {
             // LSUIElement apps need explicit activation to bring windows forward.

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -17,12 +18,20 @@ struct GridForgeApp: App {
                 }
         }
         .menuBarExtraStyle(.menu)
-
-        Settings {
+        Window("Preferences", id: "prefs") {
             PreferencesView()
                 .environmentObject(appState)
+                .onAppear {
+                    // Show in Cmd+Tab while Preferences are open.
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                .onDisappear {
+                    NSApp.setActivationPolicy(.accessory)
+                }
         }
-
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 640, height: 420)
         Window("About GridForge", id: "about") {
             AboutView()
                 .environmentObject(updateChecker)

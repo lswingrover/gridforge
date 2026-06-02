@@ -46,7 +46,7 @@ struct PreferencesView: View {
             .frame(minWidth: 460, minHeight: 360)
             .padding()
         }
-        .frame(width: 640, height: 420)
+        .frame(minWidth: 640, minHeight: 420)
     }
 }
 
