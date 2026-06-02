@@ -133,14 +133,11 @@ public final class DatabaseManager: @unchecked Sendable {
             var stmt: OpaquePointer?
             defer { sqlite3_finalize(stmt) }
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-            // withCString: ptr is only valid inside this block; step must be here too
-            displayID.withCString { ptr in
-                sqlite3_bind_text(stmt, 1, ptr, -1, nil)
-                if sqlite3_step(stmt) == SQLITE_ROW {
-                    config.columns   = Int(sqlite3_column_int(stmt, 0))
-                    config.rows      = Int(sqlite3_column_int(stmt, 1))
-                    config.gapPixels = CGFloat(sqlite3_column_double(stmt, 2))
-                }
+            bind(stmt, 1, displayID)
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                config.columns   = Int(sqlite3_column_int(stmt, 0))
+                config.rows      = Int(sqlite3_column_int(stmt, 1))
+                config.gapPixels = CGFloat(sqlite3_column_double(stmt, 2))
             }
         }
         return config
@@ -160,13 +157,10 @@ public final class DatabaseManager: @unchecked Sendable {
             var stmt: OpaquePointer?
             defer { sqlite3_finalize(stmt) }
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-            // Named NSString keeps utf8String ptr valid until end of scope
-            let nsDisplay = displayID as NSString
-            sqlite3_bind_text(stmt, 1, nsDisplay.utf8String, -1, nil)
+            bind(stmt, 1, displayID)
             sqlite3_bind_int (stmt, 2, Int32(config.columns))
             sqlite3_bind_int (stmt, 3, Int32(config.rows))
             sqlite3_bind_double(stmt, 4, Double(config.gapPixels))
-            _ = nsDisplay  // hold alive through step
             sqlite3_step(stmt)
         }
     }
@@ -192,21 +186,13 @@ public final class DatabaseManager: @unchecked Sendable {
                 throw GridForgeDBError.prepareFailed(sql)
             }
             let sel = shortcut.selection
-            sqlite3_bind_text(stmt, 1, (shortcut.keyCombo as NSString).utf8String, -1, nil)
+            bind(stmt, 1, shortcut.keyCombo)
             sqlite3_bind_int (stmt, 2, Int32(sel.normalizedStartCol))
             sqlite3_bind_int (stmt, 3, Int32(sel.normalizedStartRow))
             sqlite3_bind_int (stmt, 4, Int32(sel.normalizedEndCol))
             sqlite3_bind_int (stmt, 5, Int32(sel.normalizedEndRow))
-            if let d = shortcut.displayID {
-                sqlite3_bind_text(stmt, 6, (d as NSString).utf8String, -1, nil)
-            } else {
-                sqlite3_bind_null(stmt, 6)
-            }
-            if let n = shortcut.name {
-                sqlite3_bind_text(stmt, 7, (n as NSString).utf8String, -1, nil)
-            } else {
-                sqlite3_bind_null(stmt, 7)
-            }
+            bind(stmt, 6, shortcut.displayID)
+            bind(stmt, 7, shortcut.name)
             let result = sqlite3_step(stmt)
             if result != SQLITE_DONE && result != SQLITE_ROW {
                 let msg = String(cString: sqlite3_errmsg(self.db))
@@ -279,16 +265,9 @@ public final class DatabaseManager: @unchecked Sendable {
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
                 throw GridForgeDBError.prepareFailed(sql)
             }
-            // NSString.utf8String gives a stable C pointer valid for the NSString's lifetime
-            let nameBuf = (layout.name as NSString).utf8String
-            let jsonBuf = (json as NSString).utf8String
-            sqlite3_bind_text(stmt, 1, nameBuf, -1, nil)
-            if let hk = layout.hotkey {
-                sqlite3_bind_text(stmt, 2, (hk as NSString).utf8String, -1, nil)
-            } else {
-                sqlite3_bind_null(stmt, 2)
-            }
-            sqlite3_bind_text(stmt, 3, jsonBuf, -1, nil)
+            bind(stmt, 1, layout.name)
+            bind(stmt, 2, layout.hotkey)
+            bind(stmt, 3, json)
             let stepResult = sqlite3_step(stmt)
             if stepResult != SQLITE_DONE && stepResult != SQLITE_ROW {
                 let errMsg = String(cString: sqlite3_errmsg(self.db))
@@ -323,10 +302,8 @@ public final class DatabaseManager: @unchecked Sendable {
             var stmt: OpaquePointer?
             defer { sqlite3_finalize(stmt) }
             guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-            name.withCString { ptr in
-                sqlite3_bind_text(stmt, 1, ptr, -1, nil)
-                sqlite3_step(stmt)
-            }
+            bind(stmt, 1, name)
+            sqlite3_step(stmt)
         }
     }
 
@@ -373,14 +350,10 @@ public final class DatabaseManager: @unchecked Sendable {
             var stmt: OpaquePointer?
             defer { sqlite3_finalize(stmt) }
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-            let encoded   = (rule.selection.encoded as NSString).utf8String
-            let triggerStr = (rule.trigger.rawValue as NSString).utf8String
-            let bundleBuf  = (rule.bundleID as NSString).utf8String
-            let displayBuf = (rule.displayID as NSString).utf8String
-            sqlite3_bind_text(stmt, 1, bundleBuf,  -1, nil)
-            sqlite3_bind_text(stmt, 2, displayBuf, -1, nil)
-            sqlite3_bind_text(stmt, 3, encoded,    -1, nil)
-            sqlite3_bind_text(stmt, 4, triggerStr, -1, nil)
+            bind(stmt, 1, rule.bundleID)
+            bind(stmt, 2, rule.displayID)
+            bind(stmt, 3, rule.selection.encoded)
+            bind(stmt, 4, rule.trigger.rawValue)
             let stepResult = sqlite3_step(stmt)
             if stepResult != SQLITE_DONE && stepResult != SQLITE_ROW {
                 NSLog("GridForgeDB savePerAppRule step failed (%d): %s",
@@ -423,6 +396,10 @@ public final class DatabaseManager: @unchecked Sendable {
         }
     }
 
+    // MARK: - Helpers
+
+    /// Routes all SQLite text binds through a single site (GH#14).
+    /// SQLITE_TRANSIENT (-1) means SQLite copies immediately; no lifetime concern.
     private func bind(_ stmt: OpaquePointer?, _ idx: Int32, _ val: String?) {
         if let v = val { sqlite3_bind_text(stmt, idx, v, -1, nil) }
         else { sqlite3_bind_null(stmt, idx) }
