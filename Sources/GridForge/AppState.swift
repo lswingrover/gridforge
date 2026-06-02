@@ -135,10 +135,35 @@ final class AppState: ObservableObject {
     // MARK: - Layouts
 
     func saveCurrentAsLayout(name: String) {
-        db.logAction(action: "save_layout", layoutName: name)
-        let layout = NamedLayout(name: name)
+        let windows = windowManager.allVisibleWindows()
+        var entries: [LayoutEntry] = []
+
+        for win in windows {
+            let config = db.loadGridConfig(displayID: win.displayID)
+            guard let screen = displayManager.screen(for: win.displayID) else { continue }
+
+            // GridCalculator uses top-left origin; convert from macOS bottom-left coords
+            let visFrame  = screen.visibleFrame
+            let calcFrame = CGRect(x: 0, y: 0, width: visFrame.width, height: visFrame.height)
+
+            // Translate window frame to display-local, top-left-origin coordinates
+            let localX    = win.frame.minX - visFrame.minX
+            let flippedY  = visFrame.maxY - win.frame.maxY
+            let localFrame = CGRect(x: localX, y: flippedY,
+                                    width: win.frame.width, height: win.frame.height)
+
+            let calc      = GridCalculator(columns: config.columns, rows: config.rows,
+                                           gapPixels: config.gapPixels)
+            let selection = calc.selection(for: localFrame, in: calcFrame)
+            entries.append(LayoutEntry(bundleID: win.bundleID, displayID: win.displayID,
+                                       selection: selection))
+        }
+
+        let layout = NamedLayout(name: name, entries: entries)
         try? db.saveLayout(layout)
-        layouts = db.loadLayouts()
+        layouts   = db.loadLayouts()
+        db.logAction(action: "save_layout", layoutName: name)
+        NSLog("GridForge: saved layout '%@' with %d entries", name, entries.count)
     }
 
     func applyLayout(_ layout: NamedLayout) {
