@@ -4,7 +4,6 @@ import XCTest
 final class DatabaseTests: XCTestCase {
 
     var db: DatabaseManager!
-    private var tempPath: String!
 
     override func setUpWithError() throws {
         db = DatabaseManager.shared
@@ -42,6 +41,127 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(loaded.rows,    6)
     }
 
+    // MARK: - Display Profiles (GH#4)
+
+    func testMigration0002_tablesExist() {
+        // If migration 0002 ran, display_profiles and display_profile_configs exist.
+        // Saving a display profile without error confirms both tables are present.
+        db.saveDisplayProfile(key: "12345+67890", name: "Test Profile")
+        let profiles = db.loadDisplayProfiles()
+        XCTAssertFalse(profiles.isEmpty)
+    }
+
+    func testSaveAndLoadDisplayProfile() {
+        let key  = "111+222+333"
+        let name = "Triple Monitor"
+        db.saveDisplayProfile(key: key, name: name)
+        let profiles = db.loadDisplayProfiles()
+        let found = profiles.first(where: { $0.profileKey == key })
+        XCTAssertNotNil(found)
+        XCTAssertEqual(found?.name, name)
+    }
+
+    func testDisplayProfileUpsert() {
+        let key = "aaa+bbb"
+        db.saveDisplayProfile(key: key, name: "First Name")
+        db.saveDisplayProfile(key: key, name: "Updated Name")
+        let profiles = db.loadDisplayProfiles()
+        let matches  = profiles.filter { $0.profileKey == key }
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches.first?.name, "Updated Name")
+    }
+
+    func testDeleteDisplayProfile() {
+        let key = "del+test"
+        db.saveDisplayProfile(key: key, name: "Delete Me")
+        db.deleteDisplayProfile(key: key)
+        let profiles = db.loadDisplayProfiles()
+        XCTAssertNil(profiles.first(where: { $0.profileKey == key }))
+    }
+
+    func testProfileGridConfigOverridesFallback() {
+        let displayID  = "disp_main"
+        let profileKey = "603777345+603777346"
+
+        // Save universal (fallback) config
+        db.saveGridConfig(GridConfig(columns: 6, rows: 4), displayID: displayID)
+
+        // Save profile-specific override
+        db.saveGridConfig(GridConfig(columns: 10, rows: 8), displayID: displayID,
+                          profileKey: profileKey)
+
+        // With profileKey: should get the override
+        let withProfile = db.loadGridConfig(displayID: displayID, profileKey: profileKey)
+        XCTAssertEqual(withProfile.columns, 10)
+        XCTAssertEqual(withProfile.rows,    8)
+
+        // Without profileKey: should get the universal fallback
+        let universal = db.loadGridConfig(displayID: displayID)
+        XCTAssertEqual(universal.columns, 6)
+        XCTAssertEqual(universal.rows,    4)
+    }
+
+    func testProfileGridConfigFallsBackToUniversal() {
+        let displayID  = "disp_fallback"
+        let profileKey = "999+888"
+
+        // Only universal config saved — no profile-specific override
+        db.saveGridConfig(GridConfig(columns: 5, rows: 3), displayID: displayID)
+
+        // Loading with a profileKey that has no override should fall back
+        let loaded = db.loadGridConfig(displayID: displayID, profileKey: profileKey)
+        XCTAssertEqual(loaded.columns, 5)
+        XCTAssertEqual(loaded.rows,    3)
+    }
+
+    func testProfileGridConfigMissingBothReturnsDefault() {
+        let loaded = db.loadGridConfig(displayID: "no_such_display", profileKey: "no_such_profile")
+        XCTAssertEqual(loaded.columns, GridConfig.default.columns)
+        XCTAssertEqual(loaded.rows,    GridConfig.default.rows)
+    }
+
+    func testDeleteProfileAlsoDeletesConfigOverrides() {
+        let displayID  = "disp_cascade"
+        let profileKey = "cascade+test"
+        db.saveDisplayProfile(key: profileKey, name: "Cascade Test")
+        db.saveGridConfig(GridConfig(columns: 12, rows: 10), displayID: displayID,
+                          profileKey: profileKey)
+
+        db.deleteDisplayProfile(key: profileKey)
+
+        // After delete, loading with this profileKey should fall back to default
+        let loaded = db.loadGridConfig(displayID: displayID, profileKey: profileKey)
+        XCTAssertEqual(loaded.columns, GridConfig.default.columns)
+    }
+
+    // MARK: - Shortcuts (profile_key column exists after migration 0002)
+
+    func testShortcutWithProfileKey() throws {
+        let sel = GridSelection(startCell: GridCell(col: 0, row: 0),
+                                endCell:   GridCell(col: 2, row: 1))
+        let sc = SavedShortcut(keyCombo: "cmd+alt+1_\(UUID())",
+                               selection: sel,
+                               profileKey: "111+222")
+        try db.saveShortcut(sc)
+        let loaded = db.loadShortcuts()
+        let found  = loaded.first(where: { $0.keyCombo == sc.keyCombo })
+        XCTAssertNotNil(found)
+        XCTAssertEqual(found?.profileKey, "111+222")
+    }
+
+    func testShortcutWithNilProfileKey() throws {
+        let sel = GridSelection(startCell: GridCell(col: 1, row: 1),
+                                endCell:   GridCell(col: 3, row: 2))
+        let sc = SavedShortcut(keyCombo: "cmd+shift+2_\(UUID())",
+                               selection: sel,
+                               profileKey: nil)
+        try db.saveShortcut(sc)
+        let loaded = db.loadShortcuts()
+        let found  = loaded.first(where: { $0.keyCombo == sc.keyCombo })
+        XCTAssertNotNil(found)
+        XCTAssertNil(found?.profileKey)
+    }
+
     // MARK: - Layouts
 
     func testSaveAndLoadLayout() throws {
@@ -51,9 +171,8 @@ final class DatabaseTests: XCTestCase {
                                  displayID: "display_1",
                                  selection: sel)
         let layout = NamedLayout(name: "TestLayout_\(UUID())", hotkey: "cmd+1", entries: [entry])
-
         try db.saveLayout(layout)
-        let all = db.loadLayouts()
+        let all   = db.loadLayouts()
         let found = all.first(where: { $0.name == layout.name })
         XCTAssertNotNil(found)
         XCTAssertEqual(found?.hotkey, "cmd+1")

@@ -6,14 +6,19 @@ import GridForgeCore
 /// All mutations on the main thread.
 @MainActor
 final class AppState: ObservableObject {
+
     static let shared = AppState()
 
     // Published state
     @Published var isOverlayVisible  = false
-    @Published var layouts:      [NamedLayout]  = []
-    @Published var perAppRules:  [PerAppRule]   = []
-    @Published var shortcuts:    [SavedShortcut] = []
-    @Published var accessibilityGranted          = false
+    @Published var layouts:          [NamedLayout]    = []
+    @Published var perAppRules:      [PerAppRule]     = []
+    @Published var shortcuts:        [SavedShortcut]  = []
+    @Published var accessibilityGranted               = false
+
+    // Display profiles (GH#4)
+    @Published var currentProfileKey: String          = ""
+    @Published var displayProfiles:   [DisplayProfile] = []
 
     // Hotkey -- mirrored from HotkeyManager so views can observe changes
     @Published var hotkeyCode:      UInt16               = HotkeyManager.defaultKeyCode
@@ -23,8 +28,10 @@ final class AppState: ObservableObject {
     let windowManager     = WindowManager.shared
     let displayManager    = DisplayManager.shared
     let overlayController = GridOverlayController()
+
     // Exposed (non-private) so PreferencesView can drive KeyRecorderView bindings
     let hotkeyManager     = HotkeyManager()
+
     private let db        = DatabaseManager.shared
 
     private init() {
@@ -43,9 +50,13 @@ final class AppState: ObservableObject {
         accessibilityGranted = windowManager.hasAccessibilityPermission
 
         // Load persisted data
-        layouts     = db.loadLayouts()
-        perAppRules = db.loadPerAppRules()
-        shortcuts   = db.loadShortcuts()
+        layouts         = db.loadLayouts()
+        perAppRules     = db.loadPerAppRules()
+        shortcuts       = db.loadShortcuts()
+
+        // Display profiles (GH#4)
+        currentProfileKey = displayManager.currentProfileKey
+        displayProfiles   = db.loadDisplayProfiles()
 
         // Sync published hotkey state from persisted HotkeyManager values
         hotkeyCode      = hotkeyManager.keyCode
@@ -58,6 +69,15 @@ final class AppState: ObservableObject {
             }
         }
         hotkeyManager.start()
+
+        // Observe display arrangement changes (GH#4)
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.handleDisplayChange() }
+        }
 
         // Observe app launches for per-app rules
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -85,6 +105,35 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Display Profile Handling (GH#4)
+
+    private func handleDisplayChange() {
+        let newKey = displayManager.currentProfileKey
+        guard newKey != currentProfileKey else { return }
+        let oldKey = currentProfileKey
+        currentProfileKey = newKey
+        NSLog("GridForge: display arrangement changed %@ → %@", oldKey, newKey)
+        // Reload shortcuts; grid configs are loaded lazily at grid activation
+        shortcuts = db.loadShortcuts()
+        // Restart hotkey manager so new shortcut set is registered
+        hotkeyManager.stop()
+        hotkeyManager.start()
+        db.logAction(action: "display_change", displayID: newKey)
+    }
+
+    func saveCurrentDisplayProfile(name: String) {
+        let key = currentProfileKey
+        guard !key.isEmpty, !name.isEmpty else { return }
+        db.saveDisplayProfile(key: key, name: name)
+        displayProfiles = db.loadDisplayProfiles()
+        NSLog("GridForge: saved display profile '%@' for key '%@'", name, key)
+    }
+
+    func deleteDisplayProfile(profileKey: String) {
+        db.deleteDisplayProfile(key: profileKey)
+        displayProfiles = db.loadDisplayProfiles()
+    }
+
     // MARK: - Grid Activation
 
     func activateGrid() {
@@ -108,7 +157,9 @@ final class AppState: ObservableObject {
 
     func applySelection(_ selection: GridSelection, on screen: NSScreen) {
         let displayID  = displayManager.displayID(for: screen)
-        let config     = db.loadGridConfig(displayID: displayID)
+        // Use profile-aware config load (GH#4)
+        let profileKey = currentProfileKey.isEmpty ? nil : currentProfileKey
+        let config     = db.loadGridConfig(displayID: displayID, profileKey: profileKey)
         let calculator = GridCalculator(columns: config.columns, rows: config.rows, gapPixels: config.gapPixels)
         _ = screen.frame
         let visibleFrame = screen.visibleFrame
@@ -135,10 +186,28 @@ final class AppState: ObservableObject {
     // MARK: - Layouts
 
     func saveCurrentAsLayout(name: String) {
-        db.logAction(action: "save_layout", layoutName: name)
-        let layout = NamedLayout(name: name)
+        let windows = windowManager.allVisibleWindows()
+        var entries: [LayoutEntry] = []
+        for win in windows {
+            let config = db.loadGridConfig(displayID: win.displayID)
+            guard let screen = displayManager.screen(for: win.displayID) else { continue }
+            let visFrame  = screen.visibleFrame
+            let calcFrame = CGRect(x: 0, y: 0, width: visFrame.width, height: visFrame.height)
+            let localX    = win.frame.minX - visFrame.minX
+            let flippedY  = visFrame.maxY - win.frame.maxY
+            let localFrame = CGRect(x: localX, y: flippedY,
+                                    width: win.frame.width, height: win.frame.height)
+            let calc      = GridCalculator(columns: config.columns, rows: config.rows,
+                                           gapPixels: config.gapPixels)
+            let selection = calc.selection(for: localFrame, in: calcFrame)
+            entries.append(LayoutEntry(bundleID: win.bundleID, displayID: win.displayID,
+                                       selection: selection))
+        }
+        let layout = NamedLayout(name: name, entries: entries)
         try? db.saveLayout(layout)
-        layouts = db.loadLayouts()
+        layouts   = db.loadLayouts()
+        db.logAction(action: "save_layout", layoutName: name)
+        NSLog("GridForge: saved layout '%@' with %d entries", name, entries.count)
     }
 
     func applyLayout(_ layout: NamedLayout) {

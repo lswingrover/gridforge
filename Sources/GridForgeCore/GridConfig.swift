@@ -2,7 +2,6 @@ import Foundation
 import CoreGraphics
 
 // MARK: - GridConfig
-
 /// Per-display grid configuration, persisted in SQLite.
 public struct GridConfig: Sendable, Codable, Equatable {
     public var columns:    Int
@@ -18,8 +17,23 @@ public struct GridConfig: Sendable, Codable, Equatable {
     public static let `default` = GridConfig(columns: 6, rows: 4, gapPixels: 0)
 }
 
-// MARK: - NamedLayout
+// MARK: - DisplayProfile
+/// A saved named display profile (arrangement identifier + human name).
+public struct DisplayProfile: Sendable, Codable, Identifiable {
+    public var id:         Int
+    public var profileKey: String   // e.g. "603777345+603777346"
+    public var name:       String   // e.g. "Desk Setup"
+    public var createdAt:  Date
 
+    public init(id: Int = 0, profileKey: String, name: String, createdAt: Date = Date()) {
+        self.id         = id
+        self.profileKey = profileKey
+        self.name       = name
+        self.createdAt  = createdAt
+    }
+}
+
+// MARK: - NamedLayout
 /// A saved named layout: a mapping of app bundle IDs to grid selections per display.
 public struct NamedLayout: Sendable, Codable, Identifiable {
     public var id:        Int
@@ -52,7 +66,6 @@ public struct LayoutEntry: Sendable, Codable {
 }
 
 // MARK: - PerAppRule
-
 /// When this app launches/focuses, snap it to this grid selection on the given display.
 public struct PerAppRule: Sendable, Codable, Identifiable {
     public var id:        Int
@@ -76,20 +89,22 @@ public struct PerAppRule: Sendable, Codable, Identifiable {
 }
 
 // MARK: - SavedShortcut
-
 /// A keyboard shortcut (stored as Carbon key combo string) mapped to a grid selection.
 public struct SavedShortcut: Sendable, Codable, Identifiable {
-    public var id:        Int
-    public var keyCombo:  String          // e.g. "cmd+shift+1"
-    public var selection: GridSelection
-    public var displayID: String?
-    public var name:      String?
+    public var id:         Int
+    public var keyCombo:   String          // e.g. "cmd+shift+1"
+    public var selection:  GridSelection
+    public var displayID:  String?
+    public var name:       String?
+    public var profileKey: String?         // nil = applies to all profiles (GH#4)
 
-    public init(id: Int = 0, keyCombo: String, selection: GridSelection, displayID: String? = nil, name: String? = nil) {
-        self.id        = id
-        self.keyCombo  = keyCombo
-        self.selection = selection
-        self.displayID = displayID
-        self.name      = name
+    public init(id: Int = 0, keyCombo: String, selection: GridSelection,
+                displayID: String? = nil, name: String? = nil, profileKey: String? = nil) {
+        self.id         = id
+        self.keyCombo   = keyCombo
+        self.selection  = selection
+        self.displayID  = displayID
+        self.name       = name
+        self.profileKey = profileKey
     }
 }
