@@ -228,6 +228,42 @@ final class DatabaseTests: XCTestCase {
         XCTAssertNil(after, "Rule should be gone after delete")
     }
 
+        // MARK: - Snapshots
+
+    func testSaveAndLoadSnapshot() {
+        let frame1 = CGRect(x: 100, y: 200, width: 800, height: 600)
+        let frame2 = CGRect(x: 900, y: 50,  width: 500, height: 900)
+        let entries = [
+            SnapshotEntry(bundleID: "com.apple.Safari",   displayID: "display_1", frame: frame1),
+            SnapshotEntry(bundleID: "com.apple.Terminal", displayID: "display_1", frame: frame2),
+        ]
+        let name = "TestSnap_" + UUID().uuidString
+        let snap = LayoutSnapshot(name: name, entries: entries)
+        db.saveSnapshot(snap)
+        let loaded = db.loadSnapshots()
+        let found  = loaded.first(where: { $0.name == name })
+        XCTAssertNotNil(found)
+        XCTAssertEqual(found?.entries.count, 2)
+        // Verify frame round-trip (within floating-point epsilon)
+        if let e = found?.entries.first {
+            XCTAssertEqual(e.x,      Double(frame1.origin.x),   accuracy: 0.001)
+            XCTAssertEqual(e.y,      Double(frame1.origin.y),   accuracy: 0.001)
+            XCTAssertEqual(e.width,  Double(frame1.size.width),  accuracy: 0.001)
+            XCTAssertEqual(e.height, Double(frame1.size.height), accuracy: 0.001)
+        }
+    }
+
+    func testDeleteSnapshot() {
+        let name = "DeleteSnap_" + UUID().uuidString
+        let snap = LayoutSnapshot(name: name, entries: [])
+        db.saveSnapshot(snap)
+        let saved = db.loadSnapshots().first(where: { $0.name == name })
+        XCTAssertNotNil(saved, "Snapshot should exist after save")
+        db.deleteSnapshot(id: saved!.id)
+        let after = db.loadSnapshots().first(where: { $0.name == name })
+        XCTAssertNil(after, "Snapshot should be gone after delete")
+    }
+
         // MARK: - Session Log (smoke test — no read-back needed, just no crash)
 
     func testSessionLogDoesNotThrow() {

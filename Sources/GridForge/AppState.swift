@@ -13,6 +13,7 @@ final class AppState: ObservableObject {
     @Published var isOverlayVisible  = false
     @Published var layouts:          [NamedLayout]    = []
     @Published var perAppRules:      [PerAppRule]     = []
+    @Published var snapshots:        [LayoutSnapshot]  = []
     @Published var shortcuts:        [SavedShortcut]  = []
     @Published var accessibilityGranted               = false
 
@@ -52,6 +53,7 @@ final class AppState: ObservableObject {
         // Load persisted data
         layouts         = db.loadLayouts()
         perAppRules     = db.loadPerAppRules()
+        snapshots       = db.loadSnapshots()
         shortcuts       = db.loadShortcuts()
 
         // Display profiles (GH#4)
@@ -230,7 +232,35 @@ final class AppState: ObservableObject {
         db.logAction(action: "apply_layout", layoutName: layout.name)
     }
 
-    // MARK: - Shortcuts
+    // MARK: - Snapshots
+
+    func captureSnapshot(name: String) {
+        let windows = windowManager.allVisibleWindows()
+        let entries = windows.map {
+            SnapshotEntry(bundleID: $0.bundleID, displayID: $0.displayID, frame: $0.frame)
+        }
+        let snapshot = LayoutSnapshot(name: name, entries: entries)
+        db.saveSnapshot(snapshot)
+        snapshots = db.loadSnapshots()
+        db.logAction(action: "capture_snapshot", layoutName: name)
+        NSLog("GridForge: captured snapshot '%@' with %d windows", name, entries.count)
+    }
+
+    func restoreSnapshot(_ snapshot: LayoutSnapshot) {
+        for entry in snapshot.entries {
+            guard let app = NSRunningApplication.runningApplications(
+                withBundleIdentifier: entry.bundleID).first else { continue }
+            windowManager.setWindowFrame(entry.frame, forApp: app)
+        }
+        db.logAction(action: "restore_snapshot", layoutName: snapshot.name)
+    }
+
+    func deleteSnapshot(_ snapshot: LayoutSnapshot) {
+        db.deleteSnapshot(id: snapshot.id)
+        snapshots = db.loadSnapshots()
+    }
+
+        // MARK: - Shortcuts
 
     func addShortcut(_ shortcut: SavedShortcut) {
         try? db.saveShortcut(shortcut)

@@ -108,3 +108,47 @@ public struct SavedShortcut: Sendable, Codable, Identifiable {
         self.profileKey = profileKey
     }
 }
+
+// MARK: - SnapshotEntry
+/// One window's pixel-exact frame, captured at snapshot time.
+/// Frame stored as individual doubles so Codable works without CGRect extension.
+/// x/y are in global screen coordinates, bottom-left origin (matches AX API).
+public struct SnapshotEntry: Sendable, Codable {
+    public var bundleID:  String
+    public var displayID: String
+    public var x:         Double
+    public var y:         Double
+    public var width:     Double
+    public var height:    Double
+
+    /// Reconstituted CGRect (global coords, bottom-left origin).
+    public var frame: CGRect {
+        CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    public init(bundleID: String, displayID: String, frame: CGRect) {
+        self.bundleID  = bundleID
+        self.displayID = displayID
+        self.x         = Double(frame.origin.x)
+        self.y         = Double(frame.origin.y)
+        self.width     = Double(frame.size.width)
+        self.height    = Double(frame.size.height)
+    }
+}
+
+// MARK: - LayoutSnapshot
+/// A named, timestamped snapshot of all visible window positions (pixel-exact).
+/// Unlike NamedLayout (grid-aligned), snapshots store raw CGRect frames.
+public struct LayoutSnapshot: Sendable, Codable, Identifiable {
+    public var id:        Int
+    public var name:      String
+    public var entries:   [SnapshotEntry]
+    public var createdAt: Date
+
+    public init(id: Int = 0, name: String, entries: [SnapshotEntry] = [], createdAt: Date = Date()) {
+        self.id        = id
+        self.name      = name
+        self.entries   = entries
+        self.createdAt = createdAt
+    }
+}

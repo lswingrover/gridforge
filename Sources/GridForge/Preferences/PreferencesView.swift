@@ -267,31 +267,128 @@ struct AddShortcutSheet: View {
 }
 
 // MARK: - Layouts Preferences
-
 struct LayoutsPrefsView: View {
     @EnvironmentObject var appState: AppState
-    @State private var newName = ""
+    @State private var newLayoutName   = ""
+    @State private var newSnapshotName = ""
+
+    private let relFmt: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Named Layouts").font(.headline)
-            Table(appState.layouts) {
-                TableColumn("Name",   value: \.name)
-                TableColumn("Hotkey") { layout in
-                    Text(layout.hotkey ?? "—").foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+
+                // MARK: Named Layouts
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Named Layouts").font(.headline)
+                    Text("Grid-aligned positions. Snaps windows to the nearest grid cell on restore.")
+                        .foregroundStyle(.secondary).font(.callout)
+                    if appState.layouts.isEmpty {
+                        ContentUnavailableView(
+                            "No layouts saved yet",
+                            systemImage: "rectangle.3.group",
+                            description: Text("Arrange your windows, then name and save below.")
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 80)
+                    } else {
+                        Table(appState.layouts) {
+                            TableColumn("Name", value: \.name)
+                            TableColumn("Hotkey") { layout in
+                                Text(layout.hotkey ?? "—").foregroundStyle(.secondary)
+                            }
+                            .width(80)
+                            TableColumn("") { layout in
+                                Button {
+                                    appState.applyLayout(layout)
+                                } label: {
+                                    Image(systemName: "arrow.uturn.backward.circle")
+                                        .help("Restore this layout")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                            .width(28)
+                        }
+                        .frame(minHeight: 100, maxHeight: 160)
+                    }
+                    HStack {
+                        TextField("New layout name…", text: $newLayoutName)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Save Current") {
+                            guard !newLayoutName.isEmpty else { return }
+                            appState.saveCurrentAsLayout(name: newLayoutName)
+                            newLayoutName = ""
+                        }
+                        .disabled(newLayoutName.isEmpty)
+                    }
+                }
+
+                Divider()
+
+                // MARK: Snapshots
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Snapshots").font(.headline)
+                    Text("Pixel-exact positions. Restores windows to their exact frame, not grid-aligned.")
+                        .foregroundStyle(.secondary).font(.callout)
+                    if appState.snapshots.isEmpty {
+                        ContentUnavailableView(
+                            "No snapshots yet",
+                            systemImage: "camera.viewfinder",
+                            description: Text("Tap \"Capture Now\" to save the current window arrangement.")
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 80)
+                    } else {
+                        Table(appState.snapshots) {
+                            TableColumn("Name", value: \.name)
+                            TableColumn("Captured") { snap in
+                                Text(relFmt.localizedString(for: snap.createdAt, relativeTo: Date()))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .width(80)
+                            TableColumn("Win") { snap in
+                                Text("\(snap.entries.count)")
+                                    .foregroundStyle(.secondary)
+                                    .help("\(snap.entries.count) windows captured")
+                            }
+                            .width(36)
+                            TableColumn("") { snap in
+                                HStack(spacing: 4) {
+                                    Button {
+                                        appState.restoreSnapshot(snap)
+                                    } label: {
+                                        Image(systemName: "arrow.uturn.backward.circle")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .help("Restore this snapshot")
+                                    Button {
+                                        appState.deleteSnapshot(snap)
+                                    } label: {
+                                        Image(systemName: "trash").foregroundStyle(.red)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .help("Delete this snapshot")
+                                }
+                            }
+                            .width(52)
+                        }
+                        .frame(minHeight: 100, maxHeight: 200)
+                    }
+                    HStack {
+                        TextField("Snapshot name…", text: $newSnapshotName)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Capture Now") {
+                            guard !newSnapshotName.isEmpty else { return }
+                            appState.captureSnapshot(name: newSnapshotName)
+                            newSnapshotName = ""
+                        }
+                        .disabled(newSnapshotName.isEmpty)
+                    }
                 }
             }
-            .frame(minHeight: 140)
-            HStack {
-                TextField("New layout name…", text: $newName)
-                    .textFieldStyle(.roundedBorder)
-                Button("Save Current") {
-                    guard !newName.isEmpty else { return }
-                    appState.saveCurrentAsLayout(name: newName)
-                    newName = ""
-                }
-                .disabled(newName.isEmpty)
-            }
+            .padding()
         }
     }
 }

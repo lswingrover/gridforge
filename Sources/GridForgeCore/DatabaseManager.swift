@@ -123,6 +123,8 @@ public final class DatabaseManager: @unchecked Sendable {
 
         // Migration 0002 — display profiles (idempotent via IF NOT EXISTS + column check)
         try applyMigration0002()
+        // Migration 0003 — layout snapshots (GH#7)
+        try applyMigration0003()
     }
 
     private func applyMigration0002() throws {
@@ -154,7 +156,20 @@ public final class DatabaseManager: @unchecked Sendable {
         }
     }
 
-    // MARK: - Grid Config
+    private func applyMigration0003() throws {
+        try exec(
+            """
+            CREATE TABLE IF NOT EXISTS snapshots (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT    NOT NULL UNIQUE,
+                data       TEXT    NOT NULL DEFAULT '[]',
+                created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+    }
+
+        // MARK: - Grid Config
 
     /// Load grid config for a display, optionally scoped to a display profile.
     /// If profileKey is provided, checks display_profile_configs first;
@@ -556,7 +571,73 @@ public final class DatabaseManager: @unchecked Sendable {
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Snapshots
+
+    public func saveSnapshot(_ snapshot: LayoutSnapshot) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(snapshot.entries),
+              let json = String(data: data, encoding: .utf8) else { return }
+        let df = ISO8601DateFormatter()
+        let dateStr = df.string(from: snapshot.createdAt)
+        let sql = """
+            INSERT INTO snapshots (name, data, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                data       = excluded.data,
+                created_at = excluded.created_at
+        """
+        queue.sync(flags: .barrier) {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            bind(stmt, 1, snapshot.name)
+            bind(stmt, 2, json)
+            bind(stmt, 3, dateStr)
+            let result = sqlite3_step(stmt)
+            if result != SQLITE_DONE && result != SQLITE_ROW {
+                NSLog("GridForgeDB saveSnapshot failed (%d): %s", result, sqlite3_errmsg(self.db))
+            }
+        }
+    }
+
+    public func loadSnapshots() -> [LayoutSnapshot] {
+        var results: [LayoutSnapshot] = []
+        let sql = "SELECT id, name, data, created_at FROM snapshots ORDER BY created_at DESC"
+        queue.sync {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let df = ISO8601DateFormatter()
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let id      = Int(sqlite3_column_int(stmt, 0))
+                let name    = String(cString: sqlite3_column_text(stmt, 1))
+                let json    = String(cString: sqlite3_column_text(stmt, 2))
+                let dateStr = String(cString: sqlite3_column_text(stmt, 3))
+                let date    = df.date(from: dateStr) ?? Date()
+                let entries = (try? decoder.decode([SnapshotEntry].self,
+                                                    from: Data(json.utf8))) ?? []
+                results.append(LayoutSnapshot(id: id, name: name,
+                                               entries: entries, createdAt: date))
+            }
+        }
+        return results
+    }
+
+    public func deleteSnapshot(id: Int) {
+        let sql = "DELETE FROM snapshots WHERE id = ?"
+        queue.sync(flags: .barrier) {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            sqlite3_bind_int(stmt, 1, Int32(id))
+            sqlite3_step(stmt)
+        }
+    }
+
+        // MARK: - Helpers
 
     private func exec(_ sql: String) throws {
         try queue.sync(flags: .barrier) {
