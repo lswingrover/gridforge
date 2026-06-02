@@ -171,6 +171,94 @@ public final class DatabaseManager: @unchecked Sendable {
         }
     }
 
+
+    // MARK: - Shortcuts
+
+    public func saveShortcut(_ shortcut: SavedShortcut) throws {
+        // ON CONFLICT updates all mutable fields; key_combo is the unique key.
+        let sql = "INSERT INTO shortcuts (key_combo, col_start, row_start, col_end, row_end, display_id, name) " +
+                  "VALUES (?, ?, ?, ?, ?, ?, ?) " +
+                  "ON CONFLICT(key_combo) DO UPDATE SET " +
+                  "  col_start  = excluded.col_start, " +
+                  "  row_start  = excluded.row_start, " +
+                  "  col_end    = excluded.col_end, " +
+                  "  row_end    = excluded.row_end, " +
+                  "  display_id = excluded.display_id, " +
+                  "  name       = excluded.name"
+        try queue.sync(flags: .barrier) {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                throw GridForgeDBError.prepareFailed(sql)
+            }
+            let sel = shortcut.selection
+            sqlite3_bind_text(stmt, 1, (shortcut.keyCombo as NSString).utf8String, -1, nil)
+            sqlite3_bind_int (stmt, 2, Int32(sel.normalizedStartCol))
+            sqlite3_bind_int (stmt, 3, Int32(sel.normalizedStartRow))
+            sqlite3_bind_int (stmt, 4, Int32(sel.normalizedEndCol))
+            sqlite3_bind_int (stmt, 5, Int32(sel.normalizedEndRow))
+            if let d = shortcut.displayID {
+                sqlite3_bind_text(stmt, 6, (d as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 6)
+            }
+            if let n = shortcut.name {
+                sqlite3_bind_text(stmt, 7, (n as NSString).utf8String, -1, nil)
+            } else {
+                sqlite3_bind_null(stmt, 7)
+            }
+            let result = sqlite3_step(stmt)
+            if result != SQLITE_DONE && result != SQLITE_ROW {
+                let msg = String(cString: sqlite3_errmsg(self.db))
+                throw GridForgeDBError.execFailed("saveShortcut step (\(result)): \(msg)")
+            }
+        }
+    }
+
+    public func loadShortcuts() -> [SavedShortcut] {
+        var results: [SavedShortcut] = []
+        let sql = "SELECT id, key_combo, col_start, row_start, col_end, row_end, display_id, name " +
+                  "FROM shortcuts ORDER BY id"
+        queue.sync {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let id       = Int(sqlite3_column_int(stmt, 0))
+                let keyCombo = String(cString: sqlite3_column_text(stmt, 1))
+                let colStart = Int(sqlite3_column_int(stmt, 2))
+                let rowStart = Int(sqlite3_column_int(stmt, 3))
+                let colEnd   = Int(sqlite3_column_int(stmt, 4))
+                let rowEnd   = Int(sqlite3_column_int(stmt, 5))
+                let displayID = sqlite3_column_text(stmt, 6).map { String(cString: $0) }
+                let name      = sqlite3_column_text(stmt, 7).map { String(cString: $0) }
+                let sel = GridSelection(
+                    startCell: GridCell(col: colStart, row: rowStart),
+                    endCell:   GridCell(col: colEnd,   row: rowEnd)
+                )
+                results.append(SavedShortcut(
+                    id:        id,
+                    keyCombo:  keyCombo,
+                    selection: sel,
+                    displayID: displayID,
+                    name:      name
+                ))
+            }
+        }
+        return results
+    }
+
+    public func deleteShortcut(id: Int) {
+        let sql = "DELETE FROM shortcuts WHERE id = ?"
+        queue.sync(flags: .barrier) {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            sqlite3_bind_int(stmt, 1, Int32(id))
+            sqlite3_step(stmt)
+        }
+    }
+
     // MARK: - Layouts
 
     public func saveLayout(_ layout: NamedLayout) throws {

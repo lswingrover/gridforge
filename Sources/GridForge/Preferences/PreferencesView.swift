@@ -138,16 +138,139 @@ struct GridPreviewView: View {
     }
 }
 
-// MARK: - Shortcuts Preferences (stub — Phase 2)
-
+// MARK: - Shortcuts Preferences (GH#1)
 struct ShortcutsPrefsView: View {
+    @EnvironmentObject var appState: AppState
+    @State private var showAddSheet = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Keyboard Shortcuts").font(.headline)
-            Text("Map any key combo to a saved grid position.\nFull shortcut editor coming in v1.1.")
-                .foregroundStyle(.secondary)
-            Spacer()
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Keyboard Shortcuts").font(.headline)
+                Spacer()
+                Button { showAddSheet = true } label: {
+                    Label("Add", systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            if appState.shortcuts.isEmpty {
+                ContentUnavailableView(
+                    "No shortcuts yet",
+                    systemImage: "keyboard",
+                    description: Text("Tap + to map a key combo to a grid region.")
+                )
+                .frame(maxWidth: .infinity, minHeight: 100)
+            } else {
+                Table(appState.shortcuts) {
+                    TableColumn("Shortcut") { sc in
+                        Text(HotkeyManager.displayString(forCombo: sc.keyCombo))
+                            .font(.system(.body, design: .monospaced))
+                    }
+                    TableColumn("Region") { sc in
+                        Text(sc.selection.encoded)
+                            .foregroundStyle(.secondary)
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                    TableColumn("Name") { sc in
+                        Text(sc.name ?? "—").foregroundStyle(.secondary)
+                    }
+                    TableColumn("") { sc in
+                        Button {
+                            appState.deleteShortcut(sc)
+                        } label: {
+                            Image(systemName: "trash").foregroundStyle(.red)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .width(28)
+                }
+                .frame(minHeight: 120)
+            }
         }
+        .sheet(isPresented: $showAddSheet) {
+            AddShortcutSheet { sc in appState.addShortcut(sc) }
+                .environmentObject(appState)
+        }
+    }
+}
+
+// MARK: - Add Shortcut Sheet
+
+struct AddShortcutSheet: View {
+    let onSave: (SavedShortcut) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name      = ""
+    @State private var keyCode:   UInt16               = 18     // key 1
+    @State private var modifiers: NSEvent.ModifierFlags = [.command]
+    @State private var colStart  = 0
+    @State private var rowStart  = 0
+    @State private var colEnd    = 2
+    @State private var rowEnd    = 2
+
+    private var selection: GridSelection {
+        GridSelection(
+            startCell: GridCell(col: min(colStart, colEnd), row: min(rowStart, rowEnd)),
+            endCell:   GridCell(col: max(colStart, colEnd), row: max(rowStart, rowEnd))
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Add Shortcut").font(.headline).padding([.top, .horizontal])
+
+            Form {
+                Section("Key Combo") {
+                    KeyRecorderView(keyCode: $keyCode, modifiers: $modifiers)
+                        .frame(height: 28)
+                }
+
+                Section("Grid Region (col / row, zero-indexed)") {
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Start col").font(.caption).foregroundStyle(.secondary)
+                            Stepper("\(colStart)", value: $colStart, in: 0...19)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Start row").font(.caption).foregroundStyle(.secondary)
+                            Stepper("\(rowStart)", value: $rowStart, in: 0...19)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("End col").font(.caption).foregroundStyle(.secondary)
+                            Stepper("\(colEnd)", value: $colEnd, in: 0...19)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("End row").font(.caption).foregroundStyle(.secondary)
+                            Stepper("\(rowEnd)", value: $rowEnd, in: 0...19)
+                        }
+                    }
+                    Text("Region: \(selection.encoded)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                Section("Name (optional)") {
+                    TextField("e.g. Left half", text: $name)
+                }
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Add") {
+                    let combo = HotkeyManager.encode(keyCode: keyCode, modifiers: modifiers)
+                    onSave(SavedShortcut(keyCombo: combo, selection: selection,
+                                        name: name.isEmpty ? nil : name))
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
+        }
+        .frame(width: 400, height: 400)
     }
 }
 
@@ -217,9 +340,26 @@ struct AdvancedPrefsView: View {
                 }
             }
 
-            Section("Hotkey") {
-                Text("Default: ⌘⇧G — customisable hotkey editor in v1.1")
-                    .foregroundStyle(.secondary)
+            Section("Global Hotkey") {
+                HStack {
+                    Text("Invoke grid overlay")
+                    Spacer()
+                    KeyRecorderView(
+                        keyCode: Binding(
+                            get: { appState.hotkeyCode },
+                            set: { appState.updateHotkey(keyCode: $0,
+                                                         modifiers: appState.hotkeyModifiers) }
+                        ),
+                        modifiers: Binding(
+                            get: { appState.hotkeyModifiers },
+                            set: { appState.updateHotkey(keyCode: appState.hotkeyCode,
+                                                         modifiers: $0) }
+                        )
+                    )
+                    .frame(width: 120, height: 28)
+                }
+                Button("Reset to ⌘⇧G") { appState.resetHotkey() }
+                    .controlSize(.small)
             }
 
             Section("Companion API") {

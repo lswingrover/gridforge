@@ -6,21 +6,26 @@ import GridForgeCore
 /// All mutations on the main thread.
 @MainActor
 final class AppState: ObservableObject {
-
     static let shared = AppState()
 
     // Published state
     @Published var isOverlayVisible  = false
     @Published var layouts:      [NamedLayout]  = []
     @Published var perAppRules:  [PerAppRule]   = []
+    @Published var shortcuts:    [SavedShortcut] = []
     @Published var accessibilityGranted          = false
+
+    // Hotkey -- mirrored from HotkeyManager so views can observe changes
+    @Published var hotkeyCode:      UInt16               = HotkeyManager.defaultKeyCode
+    @Published var hotkeyModifiers: NSEvent.ModifierFlags = HotkeyManager.defaultModifiers
 
     // Sub-systems
     let windowManager     = WindowManager.shared
     let displayManager    = DisplayManager.shared
     let overlayController = GridOverlayController()
-    private let hotkeyManager   = HotkeyManager()
-    private let db              = DatabaseManager.shared
+    // Exposed (non-private) so PreferencesView can drive KeyRecorderView bindings
+    let hotkeyManager     = HotkeyManager()
+    private let db        = DatabaseManager.shared
 
     private init() {
         setup()
@@ -40,6 +45,11 @@ final class AppState: ObservableObject {
         // Load persisted data
         layouts     = db.loadLayouts()
         perAppRules = db.loadPerAppRules()
+        shortcuts   = db.loadShortcuts()
+
+        // Sync published hotkey state from persisted HotkeyManager values
+        hotkeyCode      = hotkeyManager.keyCode
+        hotkeyModifiers = hotkeyManager.modifiers
 
         // Wire hotkey
         hotkeyManager.onActivate = { [weak self] in
@@ -100,28 +110,18 @@ final class AppState: ObservableObject {
         let displayID  = displayManager.displayID(for: screen)
         let config     = db.loadGridConfig(displayID: displayID)
         let calculator = GridCalculator(columns: config.columns, rows: config.rows, gapPixels: config.gapPixels)
-
-        // AX API uses screen coordinates with bottom-left origin.
-        // GridCalculator uses top-left origin (isFlipped).
-        // Convert: flip Y within the screen frame.
         _ = screen.frame
         let visibleFrame = screen.visibleFrame
-
-        // Build a flipped frame for calculator (top-left origin)
         let calcFrame = CGRect(x: visibleFrame.minX,
                                y: 0,
                                width:  visibleFrame.width,
                                height: visibleFrame.height)
         var targetFrame = calculator.frame(for: selection, in: calcFrame)
-
-        // Convert back to screen (bottom-left) coordinates
-        // In macOS: screen Y = screenFrame.maxY - (calcY + cellHeight)
         let flippedY = visibleFrame.maxY - targetFrame.maxY
         targetFrame = CGRect(x: visibleFrame.minX + targetFrame.minX,
                              y: flippedY,
                              width:  targetFrame.width,
                              height: targetFrame.height)
-
         do {
             try windowManager.setFocusedWindowFrame(targetFrame)
             let frontBundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
@@ -135,8 +135,6 @@ final class AppState: ObservableObject {
     // MARK: - Layouts
 
     func saveCurrentAsLayout(name: String) {
-        // Capture all visible windows and their current grid selections
-        // Phase 2 full implementation — for now, log intent
         db.logAction(action: "save_layout", layoutName: name)
         let layout = NamedLayout(name: name)
         try? db.saveLayout(layout)
@@ -163,6 +161,31 @@ final class AppState: ObservableObject {
         db.logAction(action: "apply_layout", layoutName: layout.name)
     }
 
+    // MARK: - Shortcuts
+
+    func addShortcut(_ shortcut: SavedShortcut) {
+        try? db.saveShortcut(shortcut)
+        shortcuts = db.loadShortcuts()
+    }
+
+    func deleteShortcut(_ shortcut: SavedShortcut) {
+        db.deleteShortcut(id: shortcut.id)
+        shortcuts = db.loadShortcuts()
+    }
+
+    // MARK: - Hotkey
+
+    func updateHotkey(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) {
+        hotkeyManager.update(keyCode: keyCode, modifiers: modifiers)
+        hotkeyCode      = keyCode
+        hotkeyModifiers = modifiers
+    }
+
+    func resetHotkey() {
+        updateHotkey(keyCode:   HotkeyManager.defaultKeyCode,
+                     modifiers: HotkeyManager.defaultModifiers)
+    }
+
     // MARK: - Per-App Rules
 
     private func applyPerAppRule(bundleID: String, trigger: PerAppRule.RuleTrigger) {
@@ -170,7 +193,6 @@ final class AppState: ObservableObject {
               let screen = displayManager.screen(for: rule.displayID),
               let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
         else { return }
-
         let config     = db.loadGridConfig(displayID: rule.displayID)
         let calculator = GridCalculator(columns: config.columns, rows: config.rows, gapPixels: config.gapPixels)
         let visFrame   = screen.visibleFrame

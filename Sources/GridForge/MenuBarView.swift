@@ -2,11 +2,21 @@ import SwiftUI
 import GridForgeCore
 
 struct MenuBarView: View {
-    @EnvironmentObject var appState: AppState
+    @EnvironmentObject var appState:      AppState
+    @EnvironmentObject var updateChecker: UpdateChecker
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow)   private var openWindow
 
     var body: some View {
-        Button("Activate Grid  ⌘⇧G") {
+        // Update banner (shown only when a newer release is available)
+        if let info = updateChecker.updateInfo {
+            Button("✨ GridForge \(info.tagName) available…") {
+                updateChecker.openReleasePage()
+            }
+            Divider()
+        }
+
+        Button("Activate Grid  \(HotkeyManager.displayString(keyCode: appState.hotkeyCode, modifiers: appState.hotkeyModifiers))") {
             appState.activateGrid()
         }
 
@@ -31,7 +41,15 @@ struct MenuBarView: View {
         }
 
         Button("Preferences…") { openSettings() }
+
+        Button("About GridForge…") {
+            // LSUIElement apps need explicit activation to bring windows forward.
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: "about")
+        }
+
         Divider()
+
         Button("Quit GridForge") { NSApplication.shared.terminate(nil) }
     }
 }
