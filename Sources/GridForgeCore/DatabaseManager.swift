@@ -544,6 +544,18 @@ public final class DatabaseManager: @unchecked Sendable {
         return results
     }
 
+
+    public func deletePerAppRule(id: Int) {
+        let sql = "DELETE FROM per_app_rules WHERE id = ?"
+        queue.sync(flags: .barrier) {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            sqlite3_bind_int(stmt, 1, Int32(id))
+            sqlite3_step(stmt)
+        }
+    }
+
     // MARK: - Helpers
 
     private func exec(_ sql: String) throws {

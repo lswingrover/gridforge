@@ -257,7 +257,17 @@ final class AppState: ObservableObject {
 
     // MARK: - Per-App Rules
 
-    private func applyPerAppRule(bundleID: String, trigger: PerAppRule.RuleTrigger) {
+    func addPerAppRule(_ rule: PerAppRule) {
+        db.savePerAppRule(rule)
+        perAppRules = db.loadPerAppRules()
+    }
+
+    func deletePerAppRule(_ rule: PerAppRule) {
+        db.deletePerAppRule(id: rule.id)
+        perAppRules = db.loadPerAppRules()
+    }
+
+        private func applyPerAppRule(bundleID: String, trigger: PerAppRule.RuleTrigger) {
         guard let rule = perAppRules.first(where: { $0.bundleID == bundleID && $0.trigger == trigger }),
               let screen = displayManager.screen(for: rule.displayID),
               let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first

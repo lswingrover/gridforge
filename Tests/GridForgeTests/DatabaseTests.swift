@@ -213,7 +213,22 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(found?.trigger,   .onLaunch)
     }
 
-    // MARK: - Session Log (smoke test — no read-back needed, just no crash)
+
+    func testDeletePerAppRule() {
+        let sel  = GridSelection(startCell: GridCell(col: 1, row: 1),
+                                 endCell:   GridCell(col: 3, row: 2))
+        let bundle = "com.test.delete_" + UUID().uuidString
+        let rule = PerAppRule(bundleID: bundle, displayID: "display_1",
+                              selection: sel, trigger: .onFocus)
+        db.savePerAppRule(rule)
+        let saved = db.loadPerAppRules().first(where: { $0.bundleID == bundle })
+        XCTAssertNotNil(saved, "Rule should exist after save")
+        db.deletePerAppRule(id: saved!.id)
+        let after = db.loadPerAppRules().first(where: { $0.bundleID == bundle })
+        XCTAssertNil(after, "Rule should be gone after delete")
+    }
+
+        // MARK: - Session Log (smoke test — no read-back needed, just no crash)
 
     func testSessionLogDoesNotThrow() {
         let sel = GridSelection(startCell: GridCell(col: 0, row: 0),

@@ -365,16 +365,209 @@ struct DisplaysPrefsView: View {
     }
 }
 
-// MARK: - Per-App Rules (stub — Phase 4)
-
+// MARK: - Per-App Rules (GH#6)
 struct PerAppRulesPrefsView: View {
+    @EnvironmentObject var appState: AppState
+
+    @State private var showAddSheet = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Per-App Rules").font(.headline)
-            Text("Automatically snap apps to a grid position on launch or focus.\nComing in v1.1.")
-                .foregroundStyle(.secondary)
-            Spacer()
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Per-App Rules").font(.headline)
+                Spacer()
+                Button { showAddSheet = true } label: {
+                    Label("Add", systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            if appState.perAppRules.isEmpty {
+                ContentUnavailableView(
+                    "No rules yet",
+                    systemImage: "app.badge",
+                    description: Text("Tap + to snap an app to a grid region on launch or focus.")
+                )
+                .frame(maxWidth: .infinity, minHeight: 100)
+            } else {
+                Table(appState.perAppRules) {
+                    TableColumn("App") { rule in
+                        Text(appName(for: rule.bundleID))
+                    }
+                    .width(min: 120)
+                    TableColumn("Display") { rule in
+                        Text(displayName(for: rule.displayID))
+                            .foregroundStyle(.secondary)
+                    }
+                    TableColumn("Trigger") { rule in
+                        Text(rule.trigger == .onLaunch ? "On Launch" : "On Focus")
+                            .foregroundStyle(.secondary)
+                    }
+                    TableColumn("Region") { rule in
+                        Text(rule.selection.encoded)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    TableColumn("") { rule in
+                        Button {
+                            appState.deletePerAppRule(rule)
+                        } label: {
+                            Image(systemName: "trash").foregroundStyle(.red)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .width(28)
+                }
+                .frame(minHeight: 120)
+            }
         }
+        .sheet(isPresented: $showAddSheet) {
+            AddPerAppRuleSheet { rule in
+                appState.addPerAppRule(rule)
+            }
+            .environmentObject(appState)
+        }
+    }
+
+    private func appName(for bundleID: String) -> String {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            return url.deletingPathExtension().lastPathComponent
+        }
+        return bundleID
+    }
+
+    private func displayName(for displayID: String) -> String {
+        appState.displayManager.allDisplayProfiles.first { $0.id == displayID }?.name ?? displayID
+    }
+}
+
+// MARK: - Add Per-App Rule Sheet
+struct AddPerAppRuleSheet: View {
+    let onSave: (PerAppRule) -> Void
+    @EnvironmentObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var runningApps: [(bundleID: String, name: String)] = []
+    @State private var selectedBundleID = ""
+    @State private var customBundleID   = ""
+    @State private var useCustom        = false
+    @State private var selectedDisplayIndex = 0
+    @State private var trigger: PerAppRule.RuleTrigger = .onLaunch
+    @State private var colStart = 0
+    @State private var rowStart = 0
+    @State private var colEnd   = 2
+    @State private var rowEnd   = 2
+
+    private var displays: [(id: String, name: String)] {
+        appState.displayManager.allDisplayProfiles
+    }
+
+    private var effectiveBundleID: String {
+        useCustom ? customBundleID : selectedBundleID
+    }
+
+    private var selection: GridSelection {
+        GridSelection(
+            startCell: GridCell(col: min(colStart, colEnd), row: min(rowStart, rowEnd)),
+            endCell:   GridCell(col: max(colStart, colEnd), row: max(rowStart, rowEnd))
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Add Per-App Rule").font(.headline).padding([.top, .horizontal])
+
+            Form {
+                Section("App") {
+                    Toggle("Enter bundle ID manually", isOn: $useCustom)
+                    if useCustom {
+                        TextField("com.example.App", text: $customBundleID)
+                    } else {
+                        Picker("Running App", selection: $selectedBundleID) {
+                            ForEach(runningApps, id: \.bundleID) { app in
+                                Text(app.name).tag(app.bundleID)
+                            }
+                        }
+                    }
+                }
+
+                Section("Trigger") {
+                    Picker("When", selection: $trigger) {
+                        Text("On Launch").tag(PerAppRule.RuleTrigger.onLaunch)
+                        Text("On Focus").tag(PerAppRule.RuleTrigger.onFocus)
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                Section("Display") {
+                    if displays.isEmpty {
+                        Text("No displays detected").foregroundStyle(.secondary)
+                    } else {
+                        Picker("Display", selection: $selectedDisplayIndex) {
+                            ForEach(displays.indices, id: \.self) { i in
+                                Text(displays[i].name).tag(i)
+                            }
+                        }
+                    }
+                }
+
+                Section("Grid Region (col / row, zero-indexed)") {
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Start col").font(.caption).foregroundStyle(.secondary)
+                            Stepper("\(colStart)", value: $colStart, in: 0...19)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Start row").font(.caption).foregroundStyle(.secondary)
+                            Stepper("\(rowStart)", value: $rowStart, in: 0...19)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("End col").font(.caption).foregroundStyle(.secondary)
+                            Stepper("\(colEnd)", value: $colEnd, in: 0...19)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("End row").font(.caption).foregroundStyle(.secondary)
+                            Stepper("\(rowEnd)", value: $rowEnd, in: 0...19)
+                        }
+                    }
+                    Text("Region: \(selection.encoded)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Add") {
+                    let displayID = selectedDisplayIndex < displays.count
+                        ? displays[selectedDisplayIndex].id : "display_main"
+                    onSave(PerAppRule(bundleID: effectiveBundleID, displayID: displayID,
+                                     selection: selection, trigger: trigger))
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(effectiveBundleID.isEmpty)
+            }
+            .padding()
+        }
+        .frame(width: 440, height: 460)
+        .onAppear { loadRunningApps() }
+    }
+
+    private func loadRunningApps() {
+        let apps = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap { app -> (bundleID: String, name: String)? in
+                guard let bid = app.bundleIdentifier, !bid.isEmpty else { return nil }
+                return (bundleID: bid, name: app.localizedName ?? bid)
+            }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        var seen = Set<String>()
+        runningApps = apps.filter { seen.insert($0.bundleID).inserted }
+        if let first = runningApps.first { selectedBundleID = first.bundleID }
     }
 }
 
