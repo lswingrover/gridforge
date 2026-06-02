@@ -9,6 +9,7 @@ struct PreferencesView: View {
         case grid      = "Grid"
         case shortcuts = "Shortcuts"
         case layouts   = "Layouts"
+        case displays  = "Displays"
         case rules     = "Per-App Rules"
         case advanced  = "Advanced"
 
@@ -17,6 +18,7 @@ struct PreferencesView: View {
             case .grid:      return "grid"
             case .shortcuts: return "keyboard"
             case .layouts:   return "rectangle.3.group"
+            case .displays:  return "display"
             case .rules:     return "app.badge"
             case .advanced:  return "gear"
             }
@@ -36,6 +38,7 @@ struct PreferencesView: View {
                 case .grid:      GridPrefsView()
                 case .shortcuts: ShortcutsPrefsView()
                 case .layouts:   LayoutsPrefsView()
+                case .displays:  DisplaysPrefsView()
                 case .rules:     PerAppRulesPrefsView()
                 case .advanced:  AdvancedPrefsView()
                 }
@@ -68,24 +71,18 @@ struct GridPrefsView: View {
                 }
             }
             .onChange(of: selectedDisplayIndex) { loadConfig() }
-
             Divider()
-
             Stepper("Columns: \(columns)", value: $columns, in: 1...20)
             Stepper("Rows: \(rows)",       value: $rows,    in: 1...20)
-
             HStack {
                 Text("Gap")
                 Slider(value: $gap, in: 0...20, step: 1)
                 Text("\(Int(gap)) px").frame(width: 40, alignment: .trailing)
             }
-
             Divider()
-
             GridPreviewView(columns: columns, rows: rows)
                 .frame(height: 120)
                 .cornerRadius(8)
-
         }
         .onAppear { loadConfig() }
         .onChange(of: columns) { saveConfig() }
@@ -139,6 +136,7 @@ struct GridPreviewView: View {
 }
 
 // MARK: - Shortcuts Preferences (GH#1)
+
 struct ShortcutsPrefsView: View {
     @EnvironmentObject var appState: AppState
     @State private var showAddSheet = false
@@ -153,7 +151,6 @@ struct ShortcutsPrefsView: View {
                 }
                 .buttonStyle(.borderless)
             }
-
             if appState.shortcuts.isEmpty {
                 ContentUnavailableView(
                     "No shortcuts yet",
@@ -200,7 +197,6 @@ struct ShortcutsPrefsView: View {
 struct AddShortcutSheet: View {
     let onSave: (SavedShortcut) -> Void
     @Environment(\.dismiss) private var dismiss
-
     @State private var name      = ""
     @State private var keyCode:   UInt16               = 18     // key 1
     @State private var modifiers: NSEvent.ModifierFlags = [.command]
@@ -219,13 +215,11 @@ struct AddShortcutSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Add Shortcut").font(.headline).padding([.top, .horizontal])
-
             Form {
                 Section("Key Combo") {
                     KeyRecorderView(keyCode: $keyCode, modifiers: $modifiers)
                         .frame(height: 28)
                 }
-
                 Section("Grid Region (col / row, zero-indexed)") {
                     HStack(spacing: 16) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -248,13 +242,11 @@ struct AddShortcutSheet: View {
                     Text("Region: \(selection.encoded)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-
                 Section("Name (optional)") {
                     TextField("e.g. Left half", text: $name)
                 }
             }
             .formStyle(.grouped)
-
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
@@ -283,7 +275,6 @@ struct LayoutsPrefsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Named Layouts").font(.headline)
-
             Table(appState.layouts) {
                 TableColumn("Name",   value: \.name)
                 TableColumn("Hotkey") { layout in
@@ -291,7 +282,6 @@ struct LayoutsPrefsView: View {
                 }
             }
             .frame(minHeight: 140)
-
             HStack {
                 TextField("New layout name…", text: $newName)
                     .textFieldStyle(.roundedBorder)
@@ -303,6 +293,75 @@ struct LayoutsPrefsView: View {
                 .disabled(newName.isEmpty)
             }
         }
+    }
+}
+
+// MARK: - Displays Preferences (GH#4)
+
+struct DisplaysPrefsView: View {
+    @EnvironmentObject var appState: AppState
+    @State private var profileName = ""
+
+    var body: some View {
+        Form {
+            Section("Current Arrangement") {
+                HStack {
+                    Label("Profile Key", systemImage: "display.2")
+                    Spacer()
+                    Text(appState.currentProfileKey.isEmpty ? "—" : appState.currentProfileKey)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                HStack {
+                    TextField("Profile name (e.g. Desk Setup)…", text: $profileName)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Save as Profile") {
+                        guard !profileName.isEmpty else { return }
+                        appState.saveCurrentDisplayProfile(name: profileName)
+                        profileName = ""
+                    }
+                    .disabled(profileName.isEmpty || appState.currentProfileKey.isEmpty)
+                }
+            }
+
+            Section("Saved Profiles") {
+                if appState.displayProfiles.isEmpty {
+                    Text("No profiles saved yet. Connect your displays and tap \"Save as Profile\".")
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                } else {
+                    ForEach(appState.displayProfiles) { profile in
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(profile.name).fontWeight(.medium)
+                                Text(profile.profileKey)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            if profile.profileKey == appState.currentProfileKey {
+                                Label("Active", systemImage: "checkmark.circle.fill")
+                                    .labelStyle(.iconOnly)
+                                    .foregroundStyle(.green)
+                                    .help("This profile matches your current display arrangement")
+                            }
+                            Button {
+                                appState.deleteDisplayProfile(profileKey: profile.profileKey)
+                            } label: {
+                                Image(systemName: "trash").foregroundStyle(.red)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Delete profile")
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 
@@ -339,7 +398,6 @@ struct AdvancedPrefsView: View {
                     }
                 }
             }
-
             Section("Global Hotkey") {
                 HStack {
                     Text("Invoke grid overlay")
@@ -361,17 +419,15 @@ struct AdvancedPrefsView: View {
                 Button("Reset to ⌘⇧G") { appState.resetHotkey() }
                     .controlSize(.small)
             }
-
             Section("Companion API") {
                 Text("Local API server on port 14731\nEvery UI action is reachable via Claude, other AI, SDK, or API.")
                     .foregroundStyle(.secondary)
             }
-
             Section("About") {
                 HStack {
                     Text("GridForge")
                     Spacer()
-                    Text("v1.0.0").foregroundStyle(.secondary)
+                    Text("v\(AppVersion.current)").foregroundStyle(.secondary)
                 }
                 Link("View on GitHub",
                      destination: URL(string: "https://github.com/lswingrover/gridforge")!)

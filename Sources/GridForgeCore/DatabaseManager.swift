@@ -14,7 +14,6 @@ public final class DatabaseManager: @unchecked Sendable {
 
     private init() {}
 
-
     // MARK: - Lifecycle
 
     public func open() throws {
@@ -23,7 +22,6 @@ public final class DatabaseManager: @unchecked Sendable {
             .appendingPathComponent("GridForge")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let path = dir.appendingPathComponent("gridforge.db").path
-
         var localDB: OpaquePointer?
         guard sqlite3_open(path, &localDB) == SQLITE_OK, let localDB else {
             throw GridForgeDBError.openFailed(path)
@@ -56,6 +54,7 @@ public final class DatabaseManager: @unchecked Sendable {
     // MARK: - Migrations
 
     private func applyMigrations() throws {
+        // Migration 0001 — initial schema (all CREATE TABLE IF NOT EXISTS, idempotent)
         let migrations: [String] = [
             """
             CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)
@@ -118,15 +117,78 @@ public final class DatabaseManager: @unchecked Sendable {
             )
             """
         ]
-
         for sql in migrations {
             try exec(sql)
+        }
+
+        // Migration 0002 — display profiles (idempotent via IF NOT EXISTS + column check)
+        try applyMigration0002()
+    }
+
+    private func applyMigration0002() throws {
+        // Named display profiles registry
+        try exec("""
+            CREATE TABLE IF NOT EXISTS display_profiles (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_key TEXT    NOT NULL UNIQUE,
+                name        TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        // Per-profile grid config overrides (separate from universal grid_config)
+        try exec("""
+            CREATE TABLE IF NOT EXISTS display_profile_configs (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                display_id  TEXT    NOT NULL,
+                profile_key TEXT    NOT NULL,
+                columns     INTEGER NOT NULL DEFAULT 6,
+                rows        INTEGER NOT NULL DEFAULT 4,
+                gap_pixels  REAL    NOT NULL DEFAULT 0.0,
+                updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(display_id, profile_key)
+            )
+        """)
+        // Add profile_key column to shortcuts (GH#4 — nil = applies to all profiles)
+        if !columnExists(table: "shortcuts", column: "profile_key") {
+            try exec("ALTER TABLE shortcuts ADD COLUMN profile_key TEXT")
         }
     }
 
     // MARK: - Grid Config
 
-    public func loadGridConfig(displayID: String) -> GridConfig {
+    /// Load grid config for a display, optionally scoped to a display profile.
+    /// If profileKey is provided, checks display_profile_configs first;
+    /// falls back to the universal grid_config row.
+    public func loadGridConfig(displayID: String, profileKey: String? = nil) -> GridConfig {
+        // 1. Try profile-specific override
+        if let key = profileKey, !key.isEmpty {
+            let profileSQL = """
+                SELECT columns, rows, gap_pixels
+                FROM display_profile_configs
+                WHERE display_id = ? AND profile_key = ?
+            """
+            var found: GridConfig?
+            queue.sync {
+                var stmt: OpaquePointer?
+                defer { sqlite3_finalize(stmt) }
+                guard sqlite3_prepare_v2(db, profileSQL, -1, &stmt, nil) == SQLITE_OK else { return }
+                bind(stmt, 1, displayID)
+                bind(stmt, 2, key)
+                if sqlite3_step(stmt) == SQLITE_ROW {
+                    found = GridConfig(
+                        columns:   Int(sqlite3_column_int(stmt, 0)),
+                        rows:      Int(sqlite3_column_int(stmt, 1)),
+                        gapPixels: CGFloat(sqlite3_column_double(stmt, 2))
+                    )
+                }
+            }
+            if let f = found { return f }
+        }
+        // 2. Fall back to universal config
+        return loadUniversalGridConfig(displayID: displayID)
+    }
+
+    private func loadUniversalGridConfig(displayID: String) -> GridConfig {
         var config = GridConfig.default
         let sql = "SELECT columns, rows, gap_pixels FROM grid_config WHERE display_id = ?"
         queue.sync {
@@ -143,7 +205,18 @@ public final class DatabaseManager: @unchecked Sendable {
         return config
     }
 
-    public func saveGridConfig(_ config: GridConfig, displayID: String) {
+    /// Save grid config.
+    /// - If profileKey is nil/empty: saves to universal grid_config (existing behaviour).
+    /// - If profileKey is provided: saves to display_profile_configs (profile-specific override).
+    public func saveGridConfig(_ config: GridConfig, displayID: String, profileKey: String? = nil) {
+        if let key = profileKey, !key.isEmpty {
+            saveProfileGridConfig(config, displayID: displayID, profileKey: key)
+        } else {
+            saveUniversalGridConfig(config, displayID: displayID)
+        }
+    }
+
+    private func saveUniversalGridConfig(_ config: GridConfig, displayID: String) {
         let sql = """
             INSERT INTO grid_config (display_id, columns, rows, gap_pixels)
             VALUES (?, ?, ?, ?)
@@ -158,27 +231,111 @@ public final class DatabaseManager: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             bind(stmt, 1, displayID)
-            sqlite3_bind_int (stmt, 2, Int32(config.columns))
-            sqlite3_bind_int (stmt, 3, Int32(config.rows))
+            sqlite3_bind_int   (stmt, 2, Int32(config.columns))
+            sqlite3_bind_int   (stmt, 3, Int32(config.rows))
             sqlite3_bind_double(stmt, 4, Double(config.gapPixels))
             sqlite3_step(stmt)
         }
     }
 
+    private func saveProfileGridConfig(_ config: GridConfig, displayID: String, profileKey: String) {
+        let sql = """
+            INSERT INTO display_profile_configs (display_id, profile_key, columns, rows, gap_pixels)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(display_id, profile_key) DO UPDATE SET
+                columns    = excluded.columns,
+                rows       = excluded.rows,
+                gap_pixels = excluded.gap_pixels,
+                updated_at = datetime('now')
+        """
+        // Note: 5 bind positions (display_id, profile_key, columns, rows, gap_pixels)
+        let sql5 = """
+            INSERT INTO display_profile_configs (display_id, profile_key, columns, rows, gap_pixels)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(display_id, profile_key) DO UPDATE SET
+                columns    = excluded.columns,
+                rows       = excluded.rows,
+                gap_pixels = excluded.gap_pixels,
+                updated_at = datetime('now')
+        """
+        _ = sql  // suppress unused warning
+        queue.sync(flags: .barrier) {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql5, -1, &stmt, nil) == SQLITE_OK else { return }
+            bind(stmt, 1, displayID)
+            bind(stmt, 2, profileKey)
+            sqlite3_bind_int   (stmt, 3, Int32(config.columns))
+            sqlite3_bind_int   (stmt, 4, Int32(config.rows))
+            sqlite3_bind_double(stmt, 5, Double(config.gapPixels))
+            sqlite3_step(stmt)
+        }
+    }
+
+    // MARK: - Display Profiles
+
+    public func saveDisplayProfile(key: String, name: String) {
+        let sql = """
+            INSERT INTO display_profiles (profile_key, name)
+            VALUES (?, ?)
+            ON CONFLICT(profile_key) DO UPDATE SET name = excluded.name
+        """
+        queue.sync(flags: .barrier) {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            bind(stmt, 1, key)
+            bind(stmt, 2, name)
+            sqlite3_step(stmt)
+        }
+    }
+
+    public func loadDisplayProfiles() -> [DisplayProfile] {
+        var results: [DisplayProfile] = []
+        let sql = "SELECT id, profile_key, name, created_at FROM display_profiles ORDER BY created_at"
+        queue.sync {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let id         = Int(sqlite3_column_int(stmt, 0))
+                let profileKey = String(cString: sqlite3_column_text(stmt, 1))
+                let name       = String(cString: sqlite3_column_text(stmt, 2))
+                results.append(DisplayProfile(id: id, profileKey: profileKey, name: name))
+            }
+        }
+        return results
+    }
+
+    public func deleteDisplayProfile(key: String) {
+        // Delete profile and its config overrides
+        let deleteCfg = "DELETE FROM display_profile_configs WHERE profile_key = ?"
+        let deleteProf = "DELETE FROM display_profiles WHERE profile_key = ?"
+        queue.sync(flags: .barrier) {
+            for sql in [deleteCfg, deleteProf] {
+                var stmt: OpaquePointer?
+                defer { sqlite3_finalize(stmt) }
+                guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else { continue }
+                self.bind(stmt, 1, key)
+                sqlite3_step(stmt)
+            }
+        }
+    }
 
     // MARK: - Shortcuts
 
     public func saveShortcut(_ shortcut: SavedShortcut) throws {
         // ON CONFLICT updates all mutable fields; key_combo is the unique key.
-        let sql = "INSERT INTO shortcuts (key_combo, col_start, row_start, col_end, row_end, display_id, name) " +
-                  "VALUES (?, ?, ?, ?, ?, ?, ?) " +
+        let sql = "INSERT INTO shortcuts (key_combo, col_start, row_start, col_end, row_end, display_id, name, profile_key) " +
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
                   "ON CONFLICT(key_combo) DO UPDATE SET " +
-                  "  col_start  = excluded.col_start, " +
-                  "  row_start  = excluded.row_start, " +
-                  "  col_end    = excluded.col_end, " +
-                  "  row_end    = excluded.row_end, " +
-                  "  display_id = excluded.display_id, " +
-                  "  name       = excluded.name"
+                  "  col_start   = excluded.col_start, " +
+                  "  row_start   = excluded.row_start, " +
+                  "  col_end     = excluded.col_end, " +
+                  "  row_end     = excluded.row_end, " +
+                  "  display_id  = excluded.display_id, " +
+                  "  name        = excluded.name, " +
+                  "  profile_key = excluded.profile_key"
         try queue.sync(flags: .barrier) {
             var stmt: OpaquePointer?
             defer { sqlite3_finalize(stmt) }
@@ -187,12 +344,13 @@ public final class DatabaseManager: @unchecked Sendable {
             }
             let sel = shortcut.selection
             bind(stmt, 1, shortcut.keyCombo)
-            sqlite3_bind_int (stmt, 2, Int32(sel.normalizedStartCol))
-            sqlite3_bind_int (stmt, 3, Int32(sel.normalizedStartRow))
-            sqlite3_bind_int (stmt, 4, Int32(sel.normalizedEndCol))
-            sqlite3_bind_int (stmt, 5, Int32(sel.normalizedEndRow))
+            sqlite3_bind_int(stmt, 2, Int32(sel.normalizedStartCol))
+            sqlite3_bind_int(stmt, 3, Int32(sel.normalizedStartRow))
+            sqlite3_bind_int(stmt, 4, Int32(sel.normalizedEndCol))
+            sqlite3_bind_int(stmt, 5, Int32(sel.normalizedEndRow))
             bind(stmt, 6, shortcut.displayID)
             bind(stmt, 7, shortcut.name)
+            bind(stmt, 8, shortcut.profileKey)
             let result = sqlite3_step(stmt)
             if result != SQLITE_DONE && result != SQLITE_ROW {
                 let msg = String(cString: sqlite3_errmsg(self.db))
@@ -203,31 +361,33 @@ public final class DatabaseManager: @unchecked Sendable {
 
     public func loadShortcuts() -> [SavedShortcut] {
         var results: [SavedShortcut] = []
-        let sql = "SELECT id, key_combo, col_start, row_start, col_end, row_end, display_id, name " +
+        let sql = "SELECT id, key_combo, col_start, row_start, col_end, row_end, display_id, name, profile_key " +
                   "FROM shortcuts ORDER BY id"
         queue.sync {
             var stmt: OpaquePointer?
             defer { sqlite3_finalize(stmt) }
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
             while sqlite3_step(stmt) == SQLITE_ROW {
-                let id       = Int(sqlite3_column_int(stmt, 0))
-                let keyCombo = String(cString: sqlite3_column_text(stmt, 1))
-                let colStart = Int(sqlite3_column_int(stmt, 2))
-                let rowStart = Int(sqlite3_column_int(stmt, 3))
-                let colEnd   = Int(sqlite3_column_int(stmt, 4))
-                let rowEnd   = Int(sqlite3_column_int(stmt, 5))
-                let displayID = sqlite3_column_text(stmt, 6).map { String(cString: $0) }
-                let name      = sqlite3_column_text(stmt, 7).map { String(cString: $0) }
+                let id        = Int(sqlite3_column_int(stmt, 0))
+                let keyCombo  = String(cString: sqlite3_column_text(stmt, 1))
+                let colStart  = Int(sqlite3_column_int(stmt, 2))
+                let rowStart  = Int(sqlite3_column_int(stmt, 3))
+                let colEnd    = Int(sqlite3_column_int(stmt, 4))
+                let rowEnd    = Int(sqlite3_column_int(stmt, 5))
+                let displayID  = sqlite3_column_text(stmt, 6).map { String(cString: $0) }
+                let name       = sqlite3_column_text(stmt, 7).map { String(cString: $0) }
+                let profileKey = sqlite3_column_text(stmt, 8).map { String(cString: $0) }
                 let sel = GridSelection(
                     startCell: GridCell(col: colStart, row: rowStart),
                     endCell:   GridCell(col: colEnd,   row: rowEnd)
                 )
                 results.append(SavedShortcut(
-                    id:        id,
-                    keyCombo:  keyCombo,
-                    selection: sel,
-                    displayID: displayID,
-                    name:      name
+                    id:         id,
+                    keyCombo:   keyCombo,
+                    selection:  sel,
+                    displayID:  displayID,
+                    name:       name,
+                    profileKey: profileKey
                 ))
             }
         }
@@ -377,7 +537,8 @@ public final class DatabaseManager: @unchecked Sendable {
                 let trigStr  = String(cString: sqlite3_column_text(stmt, 4))
                 guard let sel = GridSelection.decode(selStr) else { continue }
                 let trigger  = PerAppRule.RuleTrigger(rawValue: trigStr) ?? .onLaunch
-                results.append(PerAppRule(id: id, bundleID: bundle, displayID: display, selection: sel, trigger: trigger))
+                results.append(PerAppRule(id: id, bundleID: bundle, displayID: display,
+                                          selection: sel, trigger: trigger))
             }
         }
         return results
@@ -396,18 +557,40 @@ public final class DatabaseManager: @unchecked Sendable {
         }
     }
 
-    // MARK: - Helpers
-
     /// Routes all SQLite text binds through a single site (GH#14).
-    /// SQLITE_TRANSIENT (-1) means SQLite copies immediately; no lifetime concern.
+    /// Uses SQLITE_TRANSIENT so SQLite copies the string immediately --
+    /// safe regardless of Swift-string lifetime (fixes SQLITE_STATIC UB).
     private func bind(_ stmt: OpaquePointer?, _ idx: Int32, _ val: String?) {
-        if let v = val { sqlite3_bind_text(stmt, idx, v, -1, nil) }
-        else { sqlite3_bind_null(stmt, idx) }
+        guard let str = val else { sqlite3_bind_null(stmt, idx); return }
+        let transient = unsafeBitCast(-1 as Int,
+                                      to: (@convention(c) (UnsafeMutableRawPointer?) -> Void)?.self)
+        str.withCString { cStr in
+            sqlite3_bind_text(stmt, idx, cStr, -1, transient)
+        }
+    }
+
+    /// Returns true if the given column exists in the given table (GH#4 — idempotent migrations).
+    private func columnExists(table: String, column: String) -> Bool {
+        var found = false
+        let sql = "PRAGMA table_info(\(table))"
+        queue.sync {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                // PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
+                if let namePtr = sqlite3_column_text(stmt, 1),
+                   String(cString: namePtr) == column {
+                    found = true
+                    return
+                }
+            }
+        }
+        return found
     }
 }
 
 // MARK: - Errors
-
 public enum GridForgeDBError: Error, CustomStringConvertible {
     case openFailed(String)
     case prepareFailed(String)
