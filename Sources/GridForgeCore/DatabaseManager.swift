@@ -511,6 +511,83 @@ public final class DatabaseManager: @unchecked Sendable {
         }
     }
 
+
+    /// Mine the session_log table for usage patterns. Thread-safe; runs on the
+    /// DB's private concurrent queue. (GH#11)
+    public func analyticsReport() -> AnalyticsReport {
+        var topRegions:      [AnalyticsReport.RegionFreq] = []
+        var layoutFrequency: [AnalyticsReport.LayoutFreq] = []
+        var perAppUsage:     [AnalyticsReport.AppUsage]   = []
+        var totalSnaps = 0
+
+        queue.sync {
+            // Top 10 grid regions by snap count
+            let regionSQL = """
+                SELECT selection, COUNT(*) AS cnt
+                FROM session_log
+                WHERE action = 'snap' AND selection IS NOT NULL
+                GROUP BY selection ORDER BY cnt DESC LIMIT 10
+            """
+            var stmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, regionSQL, -1, &stmt, nil) == SQLITE_OK {
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    let sel = String(cString: sqlite3_column_text(stmt, 0))
+                    let cnt = Int(sqlite3_column_int(stmt, 1))
+                    topRegions.append(.init(selection: sel, count: cnt))
+                }
+            }
+            sqlite3_finalize(stmt); stmt = nil
+
+            // Layout apply frequency
+            let layoutSQL = """
+                SELECT layout_name, COUNT(*) AS cnt
+                FROM session_log
+                WHERE action = 'apply_layout' AND layout_name IS NOT NULL
+                GROUP BY layout_name ORDER BY cnt DESC
+            """
+            if sqlite3_prepare_v2(db, layoutSQL, -1, &stmt, nil) == SQLITE_OK {
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    let name = String(cString: sqlite3_column_text(stmt, 0))
+                    let cnt  = Int(sqlite3_column_int(stmt, 1))
+                    layoutFrequency.append(.init(name: name, count: cnt))
+                }
+            }
+            sqlite3_finalize(stmt); stmt = nil
+
+            // Top 10 apps by snap count
+            let appSQL = """
+                SELECT app_bundle, COUNT(*) AS cnt
+                FROM session_log
+                WHERE action = 'snap' AND app_bundle IS NOT NULL
+                GROUP BY app_bundle ORDER BY cnt DESC LIMIT 10
+            """
+            if sqlite3_prepare_v2(db, appSQL, -1, &stmt, nil) == SQLITE_OK {
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    let bundle = String(cString: sqlite3_column_text(stmt, 0))
+                    let cnt    = Int(sqlite3_column_int(stmt, 1))
+                    perAppUsage.append(.init(bundleID: bundle, count: cnt))
+                }
+            }
+            sqlite3_finalize(stmt); stmt = nil
+
+            // Total snap count
+            let countSQL = "SELECT COUNT(*) FROM session_log WHERE action = 'snap'"
+            if sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK,
+               sqlite3_step(stmt) == SQLITE_ROW {
+                totalSnaps = Int(sqlite3_column_int(stmt, 0))
+            }
+            sqlite3_finalize(stmt)
+        }
+
+        return AnalyticsReport(
+            topRegions:      topRegions,
+            layoutFrequency: layoutFrequency,
+            perAppUsage:     perAppUsage,
+            totalSnaps:      totalSnaps,
+            generatedAt:     Date()
+        )
+    }
+
     // MARK: - Per-App Rules
 
     public func savePerAppRule(_ rule: PerAppRule) {

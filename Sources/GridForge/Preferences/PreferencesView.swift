@@ -11,6 +11,7 @@ struct PreferencesView: View {
         case layouts   = "Layouts"
         case displays  = "Displays"
         case rules     = "Per-App Rules"
+        case stats     = "Stats"
         case advanced  = "Advanced"
 
         var icon: String {
@@ -20,6 +21,7 @@ struct PreferencesView: View {
             case .layouts:   return "rectangle.3.group"
             case .displays:  return "display"
             case .rules:     return "app.badge"
+            case .stats:     return "chart.bar"
             case .advanced:  return "gear"
             }
         }
@@ -40,6 +42,7 @@ struct PreferencesView: View {
                 case .layouts:   LayoutsPrefsView()
                 case .displays:  DisplaysPrefsView()
                 case .rules:     PerAppRulesPrefsView()
+                case .stats:     StatsPrefsView()
                 case .advanced:  AdvancedPrefsView()
                 }
             }
@@ -724,5 +727,121 @@ struct AdvancedPrefsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - Stats (GH#11)
+struct StatsPrefsView: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if let report = appState.analytics {
+                    statsContent(report)
+                } else {
+                    ContentUnavailableView(
+                        "No data yet",
+                        systemImage: "chart.bar",
+                        description: Text("Snap some windows to start building usage stats.")
+                    )
+                }
+            }
+            .padding()
+        }
+        .onAppear { appState.refreshAnalytics() }
+    }
+
+    @ViewBuilder
+    private func statsContent(_ r: AnalyticsReport) -> some View {
+        // Summary row
+        HStack(spacing: 20) {
+            statBadge(value: "\(r.totalSnaps)", label: "Total Snaps")
+            statBadge(value: "\(r.topRegions.count)", label: "Regions Used")
+            statBadge(value: "\(r.perAppUsage.count)", label: "Apps Tracked")
+        }
+
+        // Top regions
+        if !r.topRegions.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Top Grid Regions").font(.headline)
+                ForEach(Array(r.topRegions.prefix(10).enumerated()), id: \.offset) { i, reg in
+                    HStack(spacing: 8) {
+                        Text("\(i + 1).")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20, alignment: .trailing)
+                        Text(reg.selection)
+                            .font(.system(.body, design: .monospaced))
+                        Spacer()
+                        Text("\(reg.count)×")
+                            .foregroundStyle(.secondary)
+                        GeometryReader { geo in
+                            let pct = CGFloat(reg.count) / CGFloat(r.topRegions[0].count)
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(Color.accentColor.opacity(0.7))
+                                .frame(width: geo.size.width * pct)
+                        }
+                        .frame(width: 80, height: 10)
+                    }
+                }
+            }
+        }
+
+        // Layout frequency
+        if !r.layoutFrequency.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Layout Usage").font(.headline)
+                VStack(spacing: 0) {
+                    ForEach(Array(r.layoutFrequency.enumerated()), id: \.offset) { _, lf in
+                        HStack {
+                            Text(lf.name)
+                            Spacer()
+                            Text("\(lf.count)×").foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                        Divider()
+                    }
+                }
+                .background(Color.secondary.opacity(0.04))
+                .cornerRadius(8)
+            }
+        }
+
+        // Per-app usage
+        if !r.perAppUsage.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Apps Snapped Most").font(.headline)
+                VStack(spacing: 0) {
+                    ForEach(Array(r.perAppUsage.enumerated()), id: \.offset) { _, au in
+                        HStack {
+                            Text(appName(au.bundleID))
+                            Spacer()
+                            Text("\(au.count)×").foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                        Divider()
+                    }
+                }
+                .background(Color.secondary.opacity(0.04))
+                .cornerRadius(8)
+            }
+        }
+    }
+
+    private func statBadge(value: String, label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.title2.bold())
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.08))
+        .cornerRadius(10)
+    }
+
+    private func appName(_ bundleID: String) -> String {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            return url.deletingPathExtension().lastPathComponent
+        }
+        return bundleID
     }
 }

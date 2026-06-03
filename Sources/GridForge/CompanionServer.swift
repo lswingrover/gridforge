@@ -243,15 +243,23 @@ final class CompanionServer {
     }
 
     private func handleAnalytics(connection: NWConnection) {
-        // TODO(GH#11): replace stub with appState.analyticsReport() serialised to JSON.
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            self.sendJSON([
-                "topPositions":    [Any](),
-                "layoutFrequency": [Any](),
-                "perAppUsage":     [Any]()
-            ], to: connection)
-        }
+        // GH#11: aggregate session_log — runs on companion queue, DB is thread-safe.
+        let report = DatabaseManager.shared.analyticsReport()
+        let iso    = Self.isoFormatter
+        let dict: [String: Any] = [
+            "topRegions":      report.topRegions.map {
+                ["selection": $0.selection, "count": $0.count] as [String: Any]
+            },
+            "layoutFrequency": report.layoutFrequency.map {
+                ["name": $0.name, "count": $0.count] as [String: Any]
+            },
+            "perAppUsage":     report.perAppUsage.map {
+                ["bundleID": $0.bundleID, "count": $0.count] as [String: Any]
+            },
+            "totalSnaps":  report.totalSnaps,
+            "generatedAt": iso.string(from: report.generatedAt)
+        ]
+        sendJSON(dict, to: connection)
     }
 
     // MARK: - Response helpers

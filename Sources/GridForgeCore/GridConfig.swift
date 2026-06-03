@@ -152,3 +152,60 @@ public struct LayoutSnapshot: Sendable, Codable, Identifiable {
         self.createdAt = createdAt
     }
 }
+
+// MARK: - AnalyticsReport (GH#11)
+/// Aggregated usage statistics mined from the session_log table.
+public struct AnalyticsReport: Sendable, Codable {
+    /// A grid region (encoded selection string) and how many times it was snapped to.
+    public struct RegionFreq: Sendable, Codable {
+        public var selection: String   // e.g. "0,0-2,3"
+        public var count:     Int
+        public init(selection: String, count: Int) {
+            self.selection = selection
+            self.count     = count
+        }
+    }
+    /// A named layout and how many times it was applied.
+    public struct LayoutFreq: Sendable, Codable {
+        public var name:  String
+        public var count: Int
+        public init(name: String, count: Int) {
+            self.name  = name
+            self.count = count
+        }
+    }
+    /// An app bundle ID and how many times its windows were snapped.
+    public struct AppUsage: Sendable, Codable {
+        public var bundleID: String
+        public var count:    Int
+        public init(bundleID: String, count: Int) {
+            self.bundleID = bundleID
+            self.count    = count
+        }
+    }
+
+    /// Top 10 grid regions by snap count.
+    public var topRegions:      [RegionFreq]
+    /// All layout names and their apply counts, sorted descending.
+    public var layoutFrequency: [LayoutFreq]
+    /// Top 10 app bundle IDs by snap count.
+    public var perAppUsage:     [AppUsage]
+    /// Total number of snap actions ever logged.
+    public var totalSnaps:      Int
+    /// When this report was generated.
+    public var generatedAt:     Date
+
+    public init(
+        topRegions:      [RegionFreq] = [],
+        layoutFrequency: [LayoutFreq] = [],
+        perAppUsage:     [AppUsage]   = [],
+        totalSnaps:      Int          = 0,
+        generatedAt:     Date         = Date()
+    ) {
+        self.topRegions      = topRegions
+        self.layoutFrequency = layoutFrequency
+        self.perAppUsage     = perAppUsage
+        self.totalSnaps      = totalSnaps
+        self.generatedAt     = generatedAt
+    }
+}

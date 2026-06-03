@@ -274,6 +274,69 @@ final class DatabaseTests: XCTestCase {
         // If we get here without crashing, pass
     }
 
+    // MARK: - Analytics (GH#11)
+
+    func testAnalyticsEmptyDB() {
+        let r = db.analyticsReport()
+        XCTAssertEqual(r.totalSnaps,           0)
+        XCTAssertTrue (r.topRegions.isEmpty,      "fresh DB: topRegions should be empty")
+        XCTAssertTrue (r.layoutFrequency.isEmpty, "fresh DB: layoutFrequency should be empty")
+        XCTAssertTrue (r.perAppUsage.isEmpty,     "fresh DB: perAppUsage should be empty")
+    }
+
+    func testAnalyticsTopRegions() {
+        let sel1 = GridSelection(startCell: GridCell(col: 0, row: 0),
+                                 endCell:   GridCell(col: 2, row: 1))
+        let sel2 = GridSelection(startCell: GridCell(col: 3, row: 0),
+                                 endCell:   GridCell(col: 5, row: 3))
+        // Log sel1 three times, sel2 once
+        for _ in 0..<3 { db.logAction(action: "snap", displayID: "d1", selection: sel1,
+                                       appBundle: "com.apple.Safari") }
+        db.logAction(action: "snap", displayID: "d1", selection: sel2,
+                     appBundle: "com.apple.Terminal")
+        // Give the async barrier writes time to complete before the sync read
+        let exp = expectation(description: "writes flush")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { exp.fulfill() }
+        wait(for: [exp], timeout: 1)
+
+        let r = db.analyticsReport()
+        XCTAssertEqual(r.totalSnaps, 4)
+        XCTAssertFalse(r.topRegions.isEmpty)
+        XCTAssertEqual(r.topRegions.first?.selection, sel1.encoded,
+                       "highest-count region should be first")
+        XCTAssertEqual(r.topRegions.first?.count, 3)
+    }
+
+    func testAnalyticsLayoutFrequency() {
+        db.logAction(action: "apply_layout", layoutName: "Code Mode")
+        db.logAction(action: "apply_layout", layoutName: "Code Mode")
+        db.logAction(action: "apply_layout", layoutName: "Writing")
+        let exp = expectation(description: "writes flush")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { exp.fulfill() }
+        wait(for: [exp], timeout: 1)
+
+        let r = db.analyticsReport()
+        XCTAssertFalse(r.layoutFrequency.isEmpty)
+        XCTAssertEqual(r.layoutFrequency.first?.name,  "Code Mode")
+        XCTAssertEqual(r.layoutFrequency.first?.count, 2)
+    }
+
+    func testAnalyticsPerAppUsage() {
+        let sel = GridSelection(startCell: GridCell(col: 0, row: 0),
+                                endCell:   GridCell(col: 1, row: 1))
+        db.logAction(action: "snap", displayID: "d1", selection: sel, appBundle: "com.apple.Xcode")
+        db.logAction(action: "snap", displayID: "d1", selection: sel, appBundle: "com.apple.Xcode")
+        db.logAction(action: "snap", displayID: "d1", selection: sel, appBundle: "com.apple.Safari")
+        let exp = expectation(description: "writes flush")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { exp.fulfill() }
+        wait(for: [exp], timeout: 1)
+
+        let r = db.analyticsReport()
+        XCTAssertFalse(r.perAppUsage.isEmpty)
+        XCTAssertEqual(r.perAppUsage.first?.bundleID, "com.apple.Xcode")
+        XCTAssertEqual(r.perAppUsage.first?.count,    2)
+    }
+
     // MARK: - Open/Close idempotency
 
     func testCloseAndReopenIsIdempotent() throws {

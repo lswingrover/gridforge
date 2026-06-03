@@ -14,6 +14,7 @@ final class AppState: ObservableObject {
     @Published var layouts:          [NamedLayout]    = []
     @Published var perAppRules:      [PerAppRule]     = []
     @Published var snapshots:        [LayoutSnapshot]  = []
+    @Published var analytics:        AnalyticsReport?
     @Published var shortcuts:        [SavedShortcut]  = []
     @Published var accessibilityGranted               = false
 
@@ -113,6 +114,11 @@ final class AppState: ObservableObject {
         companionServer?.start()
     }
 
+    /// Recompute analytics from session_log and publish. Call after any snap or layout apply.
+    func refreshAnalytics() {
+        analytics = db.analyticsReport()
+    }
+
     // MARK: - Display Profile Handling (GH#4)
 
     private func handleDisplayChange() {
@@ -186,6 +192,7 @@ final class AppState: ObservableObject {
             let frontBundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
             db.logAction(action: "snap", displayID: displayID, selection: selection,
                          appBundle: frontBundle)
+            refreshAnalytics() // GH#11
         } catch {
             NSLog("GridForge: setFocusedWindowFrame failed: \(error)")
         }
@@ -236,6 +243,7 @@ final class AppState: ObservableObject {
             windowManager.setWindowFrame(targetFrame, forApp: app)
         }
         db.logAction(action: "apply_layout", layoutName: layout.name)
+        refreshAnalytics() // GH#11
     }
 
     // MARK: - Snapshots
