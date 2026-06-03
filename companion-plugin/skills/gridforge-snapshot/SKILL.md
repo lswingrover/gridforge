@@ -2,11 +2,13 @@
 name: gridforge-snapshot
 description: "Capture the current workspace state as a named snapshot, restore a previous snapshot, or list saved snapshots. Trigger phrases: \"save this layout\", \"capture my workspace\", \"snapshot my windows\", \"save as [name]\", \"restore [name]\", \"load my [name] layout\", \"what snapshots do I have\", \"list my snapshots\", \"gridforge snapshot\"."
 ---
+
 # GridForge Snapshot
 
 Capture and restore full workspace snapshots via the GridForge Companion API (port 14731).
 
-A snapshot captures the complete workspace state: which windows are open, their sizes, positions, and which layout is active. Restoring a snapshot repositions all matching windows.
+A snapshot captures which windows are open, their sizes, and positions.
+Restoring repositions all matching windows.
 
 ## Step 1 — Health Check
 
@@ -30,20 +32,12 @@ curl -s -X POST http://localhost:14731/snapshot/capture \
   -d '{"name": "NAME"}'
 ```
 
-Replace `NAME` with the user's chosen name (e.g. "work", "writing", "zoom").
-
 Expected response:
 ```json
-{
-  "captured": true,
-  "name": "work",
-  "windowCount": 5,
-  "layout": "3×3",
-  "timestamp": "2026-06-02T18:00:00Z"
-}
+{"captured": true, "name": "work", "windowCount": 5}
 ```
 
-Report: "Snapshot '{name}' saved — captured {windowCount} windows in '{layout}' layout."
+Report: "Snapshot '[name]' saved — captured [windowCount] windows."
 
 ## Step 4 — Restore Snapshot
 
@@ -55,38 +49,30 @@ curl -s -X POST http://localhost:14731/snapshot/restore \
 
 Expected response:
 ```json
-{
-  "restored": true,
-  "name": "work",
-  "windowsRestored": 5,
-  "windowsMissing": 1
-}
+{"name": "work", "restored": true, "windowsMissing": 1, "windowsRestored": 5}
 ```
 
-Report: "Restored '{name}' — {windowsRestored} windows repositioned, {windowsMissing} not found (app may not be open)."
-
+Report: "Restored '[name]' — [windowsRestored] windows repositioned, [windowsMissing] not found."
 If `windowsMissing > 0`, offer: "Say 'snap my windows' after opening the missing apps."
 
 ## Step 5 — List Snapshots
 
 ```bash
-curl -s http://localhost:14731/snapshots
+curl -s http://localhost:14731/list-snapshots
 ```
 
-Expected response: array of snapshot objects with `name`, `windowCount`, `layout`, `timestamp`.
+Returns `[{id, name, entryCount, createdAt}]`.
 
 Present as a compact table:
 ```
-Name       Windows  Layout      Saved
-work       5        3×3         Jun 2, 18:00
-writing    3        Side-by-Side Jun 1, 10:22
-zoom       2        Full Screen  May 31, 09:15
+Name       Windows  Saved
+work       5        2026-06-02T18:00:00Z
+writing    3        2026-06-01T10:22:00Z
 ```
 
 Offer: "Say 'restore [name]' to load one."
 
 ## Error Handling
 
-- Snapshot name not found on restore: list available snapshots.
-- `{"captured": false}`: no windows to snapshot. Open some apps first.
+- `{"captured": false}` or `{"restored": false}`: check the `error` field for details.
 - Connection refused: GridForge is not running.

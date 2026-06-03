@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Network
 import GridForgeCore
 
@@ -121,8 +122,40 @@ final class CompanionServer {
         case ("POST", "/apply-snapshot"): handleApplySnapshot(body: jsonBody, connection: connection)
         case ("POST", "/set-window"):     handleSetWindow(body: jsonBody, connection: connection)
         case ("GET",  "/analytics"):      handleAnalytics(connection: connection)
+
+        // Alias + new routes used by companion skills
+        case ("GET",  "/health"):            handleHealth(connection: connection)
+        case ("GET",  "/state"):             handleGetState(connection: connection)
+        case ("GET",  "/layouts"):           handleListLayouts(connection: connection)
+        case ("GET",  "/snapshots"):         handleListSnapshots(connection: connection)
+        case ("POST", "/snap"):              handleSnap(connection: connection)
+        case ("POST", "/apply"):             handleApply(body: jsonBody, connection: connection)
+        case ("POST", "/snapshot/capture"): handleCaptureSnapshot(body: jsonBody, connection: connection)
+        case ("POST", "/snapshot/restore"): handleRestoreSnapshotAlias(body: jsonBody, connection: connection)
+        case ("GET",  "/rules"):             handleListRules(connection: connection)
+        case ("POST", "/rules"):             handleUpsertRule(body: jsonBody, connection: connection)
+
         default:
-            send(status: 404, body: "{\"error\":\"not found\",\"path\":\"\(path)\"}", to: connection)
+            // Dynamic-segment routes: DELETE /rules/:bundleId, GET /rules/resolve?app=
+            if method == "DELETE", path.hasPrefix("/rules/") {
+                let bundleID = String(path.dropFirst("/rules/".count))
+                handleDeleteRule(bundleID: bundleID, connection: connection)
+            } else if method == "GET", path.hasPrefix("/rules/resolve") {
+                var appName = ""
+                if let qi = path.firstIndex(of: "?") {
+                    let qs = String(path[path.index(after: qi)...])
+                    for pair in qs.split(separator: "&") {
+                        let kv = pair.split(separator: "=", maxSplits: 1)
+                        if kv.count == 2, kv[0] == "app" {
+                            appName = String(kv[1]).removingPercentEncoding ?? ""
+                            break
+                        }
+                    }
+                }
+                handleResolveApp(appName: appName, connection: connection)
+            } else {
+                send(status: 404, body: "{\"error\":\"not found\",\"path\":\"\(path)\"}", to: connection)
+            }
         }
     }
 
@@ -260,6 +293,153 @@ final class CompanionServer {
             "generatedAt": iso.string(from: report.generatedAt)
         ]
         sendJSON(dict, to: connection)
+    }
+
+    // MARK: - Alias + rules route handlers
+
+    private func handleHealth(connection: NWConnection) {
+        let port = listener.port?.rawValue ?? Self.defaultPort
+        sendJSON(["status": "ok", "version": AppVersion.current, "port": Int(port)] as [String: Any],
+                 to: connection)
+    }
+
+    private func handleSnap(connection: NWConnection) {
+        Task { @MainActor [weak self] in
+            guard let self, let s = self.appState else { return }
+            guard let layout = s.layouts.first else {
+                self.sendJSON(["snapped": false, "reason": "no layouts configured"] as [String: Any],
+                              to: connection)
+                return
+            }
+            s.applyLayout(layout)
+            self.sendJSON(["snapped": true, "layout": layout.name, "windowCount": 0] as [String: Any],
+                          to: connection)
+        }
+    }
+
+    /// POST /apply — accepts "layout" key (skill-native) or "name" key (server-native).
+    private func handleApply(body: [String: Any]?, connection: NWConnection) {
+        let name = (body?["layout"] as? String) ?? (body?["name"] as? String) ?? ""
+        guard !name.isEmpty else {
+            send(status: 400, body: "{\"error\":\"missing layout name\"}", to: connection); return
+        }
+        Task { @MainActor [weak self] in
+            guard let self, let s = self.appState else { return }
+            if let layout = s.layouts.first(where: { $0.name == name }) {
+                s.applyLayout(layout)
+                self.sendJSON(["applied": true, "layout": name, "windowCount": 0] as [String: Any],
+                              to: connection)
+            } else {
+                self.sendJSON(["applied": false, "error": "layout not found: \(name)"], to: connection)
+            }
+        }
+    }
+
+    private func handleCaptureSnapshot(body: [String: Any]?, connection: NWConnection) {
+        guard let name = body?["name"] as? String, !name.isEmpty else {
+            send(status: 400, body: "{\"error\":\"missing name\"}", to: connection); return
+        }
+        Task { @MainActor [weak self] in
+            guard let self, let s = self.appState else { return }
+            s.captureSnapshot(name: name)
+            let count = s.snapshots.first(where: { $0.name == name })?.entries.count ?? 0
+            self.sendJSON(["captured": true, "name": name, "windowCount": count] as [String: Any],
+                          to: connection)
+        }
+    }
+
+    private func handleRestoreSnapshotAlias(body: [String: Any]?, connection: NWConnection) {
+        guard let name = body?["name"] as? String, !name.isEmpty else {
+            send(status: 400, body: "{\"error\":\"missing name\"}", to: connection); return
+        }
+        Task { @MainActor [weak self] in
+            guard let self, let s = self.appState else { return }
+            if let snap = s.snapshots.first(where: { $0.name == name }) {
+                s.restoreSnapshot(snap)
+                self.sendJSON(["restored": true, "name": name,
+                               "windowsRestored": snap.entries.count, "windowsMissing": 0] as [String: Any],
+                              to: connection)
+            } else {
+                self.sendJSON(["restored": false, "error": "snapshot not found: \(name)"], to: connection)
+            }
+        }
+    }
+
+    private func handleListRules(connection: NWConnection) {
+        Task { @MainActor [weak self] in
+            guard let self, let s = self.appState else { return }
+            let result: [[String: Any]] = s.perAppRules.map { r in
+                ["id": r.id, "bundleId": r.bundleID, "displayId": r.displayID,
+                 "selection": r.selection.encoded, "trigger": r.trigger.rawValue] as [String: Any]
+            }
+            self.sendJSON(result, to: connection)
+        }
+    }
+
+    private func handleUpsertRule(body: [String: Any]?, connection: NWConnection) {
+        guard let bundleID = body?["bundleId"] as? String, !bundleID.isEmpty else {
+            send(status: 400, body: "{\"error\":\"required: bundleId\"}", to: connection); return
+        }
+        Task { @MainActor [weak self] in
+            guard let self, let s = self.appState else { return }
+            let trigger = PerAppRule.RuleTrigger(rawValue: body?["trigger"] as? String ?? "") ?? .onLaunch
+            let displayID: String
+            let selection: GridSelection
+            if let layoutName = body?["layout"] as? String,
+               let layout = s.layouts.first(where: { $0.name == layoutName }),
+               let entry = (layout.entries.first(where: { $0.bundleID == bundleID }) ?? layout.entries.first) {
+                displayID = entry.displayID
+                selection = entry.selection
+            } else if let selStr = body?["selection"] as? String,
+                      let sel = GridSelection.decode(selStr) {
+                displayID = (body?["displayId"] as? String) ?? s.currentProfileKey
+                selection = sel
+            } else {
+                self.send(status: 400,
+                          body: "{\"error\":\"provide 'layout' name or 'selection'+'displayId'\"}",
+                          to: connection)
+                return
+            }
+            let rule = PerAppRule(bundleID: bundleID, displayID: displayID,
+                                  selection: selection, trigger: trigger)
+            s.addPerAppRule(rule)
+            self.sendJSON(["created": true, "bundleId": bundleID] as [String: Any], to: connection)
+        }
+    }
+
+    private func handleDeleteRule(bundleID: String, connection: NWConnection) {
+        guard !bundleID.isEmpty else {
+            send(status: 400, body: "{\"error\":\"empty bundleId\"}", to: connection); return
+        }
+        Task { @MainActor [weak self] in
+            guard let self, let s = self.appState else { return }
+            if let rule = s.perAppRules.first(where: { $0.bundleID == bundleID }) {
+                s.deletePerAppRule(rule)
+                self.sendJSON(["deleted": true, "bundleId": bundleID], to: connection)
+            } else {
+                self.sendJSON(["deleted": false, "reason": "not found"], to: connection)
+            }
+        }
+    }
+
+    private func handleResolveApp(appName: String, connection: NWConnection) {
+        guard !appName.isEmpty else {
+            send(status: 400, body: "{\"error\":\"missing ?app= query param\"}", to: connection); return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let lc = appName.lowercased()
+            if let app = NSWorkspace.shared.runningApplications.first(where: {
+                $0.localizedName?.lowercased() == lc
+            }), let bundleID = app.bundleIdentifier {
+                self.sendJSON(["bundleId": bundleID, "appName": app.localizedName ?? appName],
+                              to: connection)
+            } else {
+                self.send(status: 404,
+                          body: "{\"error\":\"app not running: \(appName)\"}",
+                          to: connection)
+            }
+        }
     }
 
     // MARK: - Response helpers
