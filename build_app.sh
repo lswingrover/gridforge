@@ -5,7 +5,7 @@ set -e
 
 APP_NAME="GridForge"
 BUNDLE_ID="com.lswingrover.gridforge"
-VERSION="1.0.0"
+VERSION="1.2.5"
 BUILD="1"
 INSTALL_DIR="/Applications"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
