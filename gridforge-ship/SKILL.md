@@ -1,6 +1,6 @@
 ---
 name: gridforge-ship
-description: Build, install, tag, and ship GridForge. Runs build_app.sh, bumps Info.plist, commits, tags, pushes to GitHub, creates release. Use when Louis says: ship gridforge, build gridforge, install gridforge, new gridforge version, gridforge-ship, rebuild gridforge.
+description: Build, install, tag, and ship GridForge. Runs build_app.sh, bumps Info.plist, commits, tags, pushes to GitHub, creates release. Use when the user says: ship gridforge, build gridforge, install gridforge, new gridforge version, gridforge-ship, rebuild gridforge.
 ---
 
 # GridForge Ship
