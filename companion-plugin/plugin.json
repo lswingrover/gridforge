@@ -1,0 +1,8 @@
+{
+  "name": "gridforge-companion",
+  "version": "1.0.0",
+  "description": "AI skills for GridForge — snap windows to a layout, apply named layouts, capture and restore workspace snapshots, and manage per-app grid rules. Requires GridForge running on this Mac (localhost:14731).",
+  "author": {
+    "name": "Louis Swingrover"
+  }
+}
