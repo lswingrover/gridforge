@@ -34,6 +34,8 @@ final class AppState: ObservableObject {
     let hotkeyManager     = HotkeyManager()
 
     private let db        = DatabaseManager.shared
+    // Companion HTTP server (GH#9 HEADLESS/UI PARITY)
+    private(set) var companionServer: CompanionServer?
 
     private init() {
         setup()
@@ -105,6 +107,10 @@ final class AppState: ObservableObject {
                 self?.applyPerAppRule(bundleID: bundleID, trigger: .onFocus)
             }
         }
+
+        // Companion API server (GH#9)
+        companionServer = CompanionServer(appState: self)
+        companionServer?.start()
     }
 
     // MARK: - Display Profile Handling (GH#4)
