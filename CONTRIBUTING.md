@@ -101,4 +101,3 @@ The Claude Cowork plugin lives in `companion/gridforge-companion.plugin/`. Run `
 - [NetWatch](https://github.com/lswingrover/NetWatch) — network health monitor
 - [ClipWatch](https://github.com/lswingrover/ClipWatch) — clipboard monitor
 - [Summon](https://github.com/lswingrover/Summon) — text expander (companion API on port 14732)
-- [obrien](https://github.com/lswingrover/obrien) — Cowork companion plugin framework
