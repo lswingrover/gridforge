@@ -15,3 +15,8 @@ gridforge.db
 *.bak
 GridForge.app/
 .build/
+
+# Operational session scripts (context system helpers)
+scripts/write_wrapup_log.py
+scripts/update_manifest_threads.py
+scripts/add_v2_tasks.py
