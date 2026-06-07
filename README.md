@@ -290,6 +290,7 @@ These apps are built by the same author and follow the same install pattern — 
 | [MacWatch](https://github.com/lswingrover/MacWatch) | Mac system health — CPU thermals, memory pressure, battery health, process monitoring, composite health score |
 | [NetWatch](https://github.com/lswingrover/NetWatch) | Network monitoring — ping latency, DNS health, Wi-Fi metrics, automatic incident bundling and ISP escalation drafts |
 | [ClipWatch](https://github.com/lswingrover/ClipWatch) | Clipboard manager — searchable history, sensitive clip detection, Touch ID, hotkey panel |
+| [Summon](https://github.com/lswingrover/Summon) | System-wide text expander — CGEventTap hotkey, snippet library, companion Cowork plugin |
 
 ---
 
