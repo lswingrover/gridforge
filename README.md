@@ -21,6 +21,22 @@ GridForge fills a specific gap: a grid-based window placement tool that is compl
 - You want to tell Claude "put me in code mode" and have it arrange your windows without clicking
 - You want to save a full workspace state, move some windows around, then restore in one action
 
+**Where the existing tools fall short:**
+
+| | Rectangle | Magnet | Divvy | GridForge |
+|---|---|---|---|---|
+| **Price** | Free | $8 | $14 (abandoned) | Free |
+| **Grid overlay** | No -- keyboard shortcuts only | No | Floating grid picker (no overlay) | Full-screen visual overlay, drag to select |
+| **Per-app rules** | No | No | No | Yes -- onLaunch and onFocus triggers per bundle ID |
+| **Layout snapshots** | No | No | No | Yes -- capture and restore exact pixel frames for all visible windows |
+| **Named layouts** | No | No | No | Yes -- save arrangement, bind to shortcut, restore in one keystroke |
+| **Companion API** | No | No | No | Yes -- every action reachable at localhost:14731; Claude or any script can drive it |
+| **Display profiles** | Basic | Basic | No | Automatic -- detects display arrangement fingerprint and loads matching config |
+| **Stage Manager** | Partial | Partial | No | Full support -- overlay renders above all stages; snapping works on active group |
+| **Open source** | Yes (MIT) | No | No | Yes (MIT) |
+
+The core gap: Rectangle is the best free option and it works. But it has no memory (no layouts, no snapshots), no automation surface (no API), and no intelligence layer (no per-app rules). Every power user ends up rebuilding a workflow in Keyboard Maestro or a shell script to compensate. GridForge bakes that layer in.
+
 ---
 
 ## Features
